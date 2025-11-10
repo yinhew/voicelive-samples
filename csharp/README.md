@@ -32,7 +32,7 @@ Demonstrates direct integration with VoiceLive using bring-your-own-models from 
 - Proactive Greeting: Agent initiates the conversation with a welcome message
 - Custom Instructions: Define your own system instructions for the AI
 - Flexible Authentication: Supports both API key and Azure credential authentication
-- 
+
 ## Prerequisites
 
 All samples require:
