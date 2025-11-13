@@ -63,7 +63,8 @@ Python samples showcasing:
 JavaScript/TypeScript samples (coming soon)
 
 ### [Java Samples](./java/)
-Java samples (coming soon)
+Java samples  showcasing:
+- **Model Quickstart**: Direct model access with flexible authentication
 
 Each language folder contains detailed setup instructions, configuration examples, and troubleshooting guides specific to that language and platform.
 
