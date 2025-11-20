@@ -2,7 +2,7 @@
 
 [SDK Reference documentation](https://learn.microsoft.com/python/api/overview/azure/ai-voicelive-readme) | [Package (PyPI)](https://pypi.org/project/azure-ai-voicelive/)
 
-This folder contains Python samples demonstrating how to build real-time voice assistants using Azure AI Speech VoiceLive service. Each sample is a standalone Python script showcasing different capabilities.
+This folder contains Python samples demonstrating how to build real-time voice assistants using Azure AI Speech VoiceLive service. Each sample is self-contained for easy understanding and deployment.
 
 ## Available Samples
 

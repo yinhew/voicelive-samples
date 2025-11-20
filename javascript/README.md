@@ -1,5 +1,9 @@
 # JavaScript/TypeScript Voice Assistant Samples
 
+[Reference documentation](/javascript/api/overview/azure/ai-voicelive-readme) | [Package (npm)](https://www.npmjs.com/package/@azure/ai-voicelive)
+
+This folder contains JavaScript samples demonstrating how to build real-time voice assistants using Azure AI Speech VoiceLive service. Each sample is self-contained for easy understanding and deployment.
+
 ## 🚧 Under Construction
 
 JavaScript and TypeScript samples for Azure AI Speech Service Voice Live are currently under development.
