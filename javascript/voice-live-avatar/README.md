@@ -10,7 +10,17 @@ This sample demonstrates the usage of Azure Voice Live API with avatar.
 The avatar feature is currently available in the following service regions: Southeast Asia, North Europe, West Europe, Sweden Central, South Central US, East US 2, and West US 2.
 
 ### Build the sample
-To run the sample, you need to build it into a Docker image: navigate to the folder containing this README.md document and run the following command:
+To run the sample, you need to build it into a Docker image. Navigate to the folder containing this README.md document (make sure you are inside the right directory):
+  ```bash
+  # Windows (PowerShell/Command Prompt)
+  cd .\javascript\voice-live-avatar\
+  ```
+  ```bash
+  # macOS/Linux (Terminal)
+  cd ./javascript/voice-live-avatar/
+  ```
+
+Run below command to build the Docker image:
   ```bash
   docker build -t voice-live-avatar .
   ```
@@ -23,7 +33,7 @@ To start the sample, use the following command:
   docker run --rm -p 3000:3000 voice-live-avatar
   ```
 
-Then open your web browser and navigate to `http://localhost:3000` to access the sample.
+Then open your web browser and navigate to [http://localhost:3000](http://localhost:3000) to access the sample.
 
 ### Configure and play the sample
 
