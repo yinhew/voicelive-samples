@@ -100,7 +100,7 @@ def setup_index(
                     SearchField(
                         name="text_vector",
                         type=SearchFieldDataType.Collection(SearchFieldDataType.Single),
-                        vector_search_dimensions=EMBEDDINGS_DIMENSIONS,
+                        vector_search_dimensions=AZURE_OPENAI_EMBEDDINGS_DIMENSIONS,
                         vector_search_profile_name="vp",
                         stored=True,
                         hidden=False,
@@ -295,7 +295,6 @@ if __name__ == "__main__":
     logger = logging.getLogger("voicerag")
     logger.setLevel(logging.INFO)
 
-    logger = logging.getLogger("voicerag")
 
     logger.info("Checking if we need to set up Azure AI Search index...")
     if os.environ.get("AZURE_SEARCH_REUSE_EXISTING") == "true":
@@ -309,9 +308,9 @@ if __name__ == "__main__":
     # Used to name index, indexer, data source and skillset
     AZURE_SEARCH_INDEX = os.environ["AZURE_SEARCH_INDEX"]
     AZURE_OPENAI_EMBEDDING_ENDPOINT = os.environ["AZURE_OPENAI_ENDPOINT"]
-    AZURE_OPENAI_EMBEDDING_DEPLOYMENT = os.environ["AZURE_OPENAI_EMBEDDING_NAME"]
-    AZURE_OPENAI_EMBEDDING_MODEL = os.environ["AZURE_OPENAI_EMBEDDING_NAME"]
-    EMBEDDINGS_DIMENSIONS = 3072
+    AZURE_OPENAI_EMBEDDING_DEPLOYMENT = os.environ["AZURE_OPENAI_EMBEDDING_MODEL"]
+    AZURE_OPENAI_EMBEDDING_MODEL = os.environ["AZURE_OPENAI_EMBEDDING_MODEL"]
+    AZURE_OPENAI_EMBEDDINGS_DIMENSIONS = os.environ["AZURE_OPENAI_EMBEDDING_DIMENSIONS"]
     AZURE_SEARCH_ENDPOINT = os.environ["AZURE_SEARCH_ENDPOINT"]
     AZURE_STORAGE_ENDPOINT = os.environ["AZURE_STORAGE_ENDPOINT"]
     AZURE_STORAGE_CONNECTION_STRING = os.environ["AZURE_STORAGE_CONNECTION_STRING"]
@@ -328,7 +327,7 @@ if __name__ == "__main__":
         azure_openai_embedding_endpoint=AZURE_OPENAI_EMBEDDING_ENDPOINT,
         azure_openai_embedding_deployment=AZURE_OPENAI_EMBEDDING_DEPLOYMENT,
         azure_openai_embedding_model=AZURE_OPENAI_EMBEDDING_MODEL,
-        azure_openai_embeddings_dimensions=EMBEDDINGS_DIMENSIONS,
+        azure_openai_embeddings_dimensions=AZURE_OPENAI_EMBEDDINGS_DIMENSIONS,
     )
 
     upload_documents(

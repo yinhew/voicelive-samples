@@ -171,7 +171,6 @@ async def start_voice_session(client_id: str, config: dict):
             model=config.get("model", "gpt-realtime"),
             voice=config.get(
                 "voice", "en-US-Ava:DragonHDLatestNeural"
-                # "voice", "pt-BR-FranciscaNeural"
             ),  # Valid VoiceLive API voice
             instructions=instructions,
             tools=tools,

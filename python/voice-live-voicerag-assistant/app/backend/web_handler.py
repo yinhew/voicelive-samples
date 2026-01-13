@@ -150,7 +150,6 @@ class WebSocketVoiceClient:
         bridge: VoiceAssistantBridge,
         model: str = "gpt-realtime",
         voice: str = "en-US-Ava:DragonHDLatestNeural",  # Valid VoiceLive API voice
-        # voice: str = "pt-BR-FranciscaNeural",  # Valid VoiceLive API voice
         instructions: str = "",
         tools: list = None,
         websocket_callback: Optional[Callable] = None,

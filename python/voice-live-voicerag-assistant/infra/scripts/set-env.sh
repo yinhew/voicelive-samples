@@ -26,6 +26,7 @@ AZURE_SEARCH_ENDPOINT=$(echo "$AZD_VALUES" | jq -r '.azureSearchEndpoint')
 # ---- Azure OpenAI Additional Variables ----
 AZURE_OPENAI_ENDPOINT=$(echo "$AZD_VALUES" | jq -r '.azureOpenAiEndpoint')
 AZURE_OPENAI_EMBEDDING_MODEL=$(echo "$AZD_VALUES" | jq -r '.azureOpenAiEmbeddingModel')
+AZURE_OPENAI_EMBEDDING_DIMENSIONS=$(echo "$AZD_VALUES" | jq -r '.azureOpenAiEmbeddingDimensions')
 
 # ---- Azure Storage Variables ----
 AZURE_STORAGE_ENDPOINT=$(echo "$AZD_VALUES" | jq -r '.azureStorageEndpoint')

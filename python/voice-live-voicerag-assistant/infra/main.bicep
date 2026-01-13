@@ -313,6 +313,7 @@ output azureVoiceLiveEndpoint string = foundryModule.outputs.extendedAIServicesC
 output azureSearchIndex string = searchIndexName
 output azureOpenAiEndpoint string = foundryModule.outputs.extendedAIServicesConfig[0].openAiEndpoint
 output azureOpenAiEmbeddingModel string = modelsConfig[1].name
+output azureOpenAiEmbeddingDimensions int = modelsConfig[1].dimensions
 output azureSearchEndpoint string = searchModule.outputs.aiSearchEndpoint
 output azureStorageEndpoint string = storageModule.outputs.endpoint
 output azureStorageConnectionString string = storageModule.outputs.connectionString

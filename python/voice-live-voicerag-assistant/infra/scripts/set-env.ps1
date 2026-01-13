@@ -33,6 +33,7 @@ AZURE_SEARCH_ENDPOINT=$(Get-AzdValue $azdEnvValues "azureSearchEndpoint")
 # ---- Azure OpenAI Additional Variables ----
 AZURE_OPENAI_ENDPOINT=$(Get-AzdValue $azdEnvValues "azureOpenAiEndpoint")
 AZURE_OPENAI_EMBEDDING_MODEL=$(Get-AzdValue $azdEnvValues "azureOpenAiEmbeddingModel")
+AZURE_OPENAI_EMBEDDING_DIMENSIONS=$(Get-AzdValue $azdEnvValues "azureOpenAiEmbeddingDimensions")
 
 # ---- Azure Storage Variables ----
 AZURE_STORAGE_ENDPOINT=$(Get-AzdValue $azdEnvValues "azureStorageEndpoint")

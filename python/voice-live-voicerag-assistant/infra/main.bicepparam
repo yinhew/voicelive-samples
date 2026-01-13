@@ -21,6 +21,7 @@ param modelsConfig = [
     version: '1'
     skuName: 'Standard'
     capacity: 350
+    dimensions: 3072
   }
 ]
 

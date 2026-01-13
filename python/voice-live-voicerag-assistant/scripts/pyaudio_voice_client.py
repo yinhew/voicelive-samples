@@ -22,7 +22,6 @@ api_key = os.getenv("AZURE_VOICELIVE_API_KEY")
 endpoint = os.getenv("AZURE_VOICELIVE_ENDPOINT")
 model = "gpt-realtime"  # os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
 voice = "en-US-Ava:DragonHDLatestNeural"
-# voice = "pt-BR-FranciscaNeural"
 credential = AzureKeyCredential(api_key)
 
 instructions = utils.load_instructions("instructions.txt")
