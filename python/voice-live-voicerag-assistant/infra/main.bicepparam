@@ -30,3 +30,7 @@ param searchIndexName = 'voicerag-intvect'
 param azureContainerAppsWorkloadProfile = 'Consumption'
 param environmentName = readEnvironmentVariable('ACA_ENV_NAME', 'voicerag-aca-env')
 param webAppExists = false 
+param foundryProjectName = 'voivelive-banking-demo'
+param voiceLiveModel = 'gpt-realtime'
+param voiceLiveVoice = 'en-US-Ava:DragonHDLatestNeural'
+param voiceLiveTranscribeModel = 'gpt-4o-transcribe'

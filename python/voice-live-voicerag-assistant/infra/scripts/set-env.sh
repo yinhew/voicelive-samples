@@ -28,6 +28,11 @@ AZURE_OPENAI_ENDPOINT=$(echo "$AZD_VALUES" | jq -r '.azureOpenAiEndpoint')
 AZURE_OPENAI_EMBEDDING_MODEL=$(echo "$AZD_VALUES" | jq -r '.azureOpenAiEmbeddingModel')
 AZURE_OPENAI_EMBEDDING_DIMENSIONS=$(echo "$AZD_VALUES" | jq -r '.azureOpenAiEmbeddingDimensions')
 
+# ---- VoiceLive Configuration ----
+VOICELIVE_MODEL=gpt-realtime
+VOICELIVE_VOICE=en-US-Ava:DragonHDLatestNeural
+VOICELIVE_TRANSCRIBE_MODEL=gpt-4o-transcribe
+
 # ---- Azure Storage Variables ----
 AZURE_STORAGE_ENDPOINT=$(echo "$AZD_VALUES" | jq -r '.azureStorageEndpoint')
 AZURE_STORAGE_CONNECTION_STRING=$(echo "$AZD_VALUES" | jq -r '.azureStorageConnectionString')

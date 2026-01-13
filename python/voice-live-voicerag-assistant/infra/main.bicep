@@ -4,9 +4,12 @@
 
 param aiServicesConfig array = []
 param modelsConfig array = []
-param foundryProjectName string = 'demo-realtime'
+param foundryProjectName string
 param principalId string
 param searchIndexName string
+param voiceLiveModel string
+param voiceLiveVoice string
+param voiceLiveTranscribeModel string
 
 @allowed(['Consumption', 'D4', 'D8', 'D16', 'D32', 'E4', 'E8', 'E16', 'E32', 'NC24-A100', 'NC48-A100', 'NC96-A100'])
 param azureContainerAppsWorkloadProfile string
@@ -289,6 +292,9 @@ module acaBackend './modules/host/container-app-upsert.bicep' = {
       AZURE_VOICELIVE_API_KEY: foundryModule.outputs.extendedAIServicesConfig[0].apiKey
       AZURE_SEARCH_ENDPOINT: searchModule.outputs.aiSearchEndpoint
       AZURE_SEARCH_INDEX: searchIndexName
+      VOICELIVE_MODEL: voiceLiveModel
+      VOICELIVE_VOICE: voiceLiveVoice
+      VOICELIVE_TRANSCRIBE_MODEL: voiceLiveTranscribeModel
       RUNNING_IN_PRODUCTION: 'true'
       AZURE_CLIENT_ID: acaIdentity.outputs.clientId
     }

@@ -35,6 +35,11 @@ AZURE_OPENAI_ENDPOINT=$(Get-AzdValue $azdEnvValues "azureOpenAiEndpoint")
 AZURE_OPENAI_EMBEDDING_MODEL=$(Get-AzdValue $azdEnvValues "azureOpenAiEmbeddingModel")
 AZURE_OPENAI_EMBEDDING_DIMENSIONS=$(Get-AzdValue $azdEnvValues "azureOpenAiEmbeddingDimensions")
 
+# ---- VoiceLive Configuration ----
+VOICELIVE_MODEL=gpt-realtime
+VOICELIVE_VOICE=en-US-Ava:DragonHDLatestNeural
+VOICELIVE_TRANSCRIBE_MODEL=gpt-4o-transcribe
+
 # ---- Azure Storage Variables ----
 AZURE_STORAGE_ENDPOINT=$(Get-AzdValue $azdEnvValues "azureStorageEndpoint")
 AZURE_STORAGE_CONNECTION_STRING=$(Get-AzdValue $azdEnvValues "azureStorageConnectionString")

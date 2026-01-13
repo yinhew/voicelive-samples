@@ -156,12 +156,10 @@ function App() {
 
     const onToggleSession = async () => {
         if (!isSessionActive) {
-            // Start voice session
-            await startSession({
-                model: 'gpt-realtime',
-                voice: 'en-US-Ava:DragonHDLatestNeural'
-                // voice: 'pt-BR-FranciscaNeural'
-            });
+            // Start voice session - backend reads config from environment variables:
+            // VOICELIVE_MODEL, VOICELIVE_VOICE, VOICELIVE_TRANSCRIBE_MODEL
+            // To override, pass config: startSession({ model: '...', voice: '...' })
+            await startSession({});
             setGroundingFiles([]);
             setToolCalls([]);
         } else {
@@ -177,11 +175,9 @@ function App() {
     const onToggleListening = async () => {
         if (!isRecording && isSessionActive) {
             await startAudioRecording();
-            resetAudioPlayer();
             setIsRecording(true);
         } else if (isRecording) {
             await stopAudioRecording();
-            stopAudioPlayer();
             setIsRecording(false);
         }
     };

@@ -186,21 +186,44 @@ export default function useVoiceAssistant({
     autoConnect
   );
 
-  const startSession = useCallback((config: SessionConfig = {}) => {
-    console.log('Starting voice session with config:', config);
-    // Reset audio player for new session
-    audioPlayer.reset();
-    
-    sendJsonMessage({
-      type: 'start_session',
-      config: {
-        model: 'gpt-realtime',
-        voice: 'en-US-Ava:DragonHDLatestNeural',
-        // voice: 'pt-BR-FranciscaNeural',
-        ...config
-      }
-    });
-  }, [sendJsonMessage, audioPlayer]);
+  /**
+   * Starts a new voice assistant session with the specified configuration.
+   * 
+   * @param config - The session configuration object
+   * @param config.model - The AI model to use for the session (defaults to 'gpt-realtime')
+   * @param config.voice - The voice model for speech synthesis (defaults to 'en-US-Ava:DragonHDLatestNeural')
+   * 
+   * @remarks
+   * This function will:
+   * - Reset the audio player to ensure a clean state for the new session
+   * - Send a 'start_session' message via WebSocket with the provided configuration
+   * - Log the session start event with the configuration details
+   * 
+   * Backend reads model/voice/transcribeModel from environment variables.
+   * Config parameter can optionally override these values.
+   * 
+   * @example
+   * ```typescript
+   * // Start session with backend defaults (recommended)
+   * startSession();
+   * 
+   * // Or with optional overrides
+   * startSession({ model: 'gpt-realtime', voice: 'en-US-Jenny:DragonHDLatestNeural' });
+   * ```
+   */
+  const startSession = useCallback(
+    (config: SessionConfig = {}) => {
+      console.log('Starting voice session with config:', config);
+      // Reset audio player for new session
+      audioPlayer.reset();
+      
+      sendJsonMessage({
+        type: 'start_session',
+        config,
+      });
+    },
+    [sendJsonMessage, audioPlayer]
+  );
 
   const stopSession = useCallback(() => {
     console.log('Stopping voice session');

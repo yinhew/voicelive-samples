@@ -148,8 +148,9 @@ class WebSocketVoiceClient:
         endpoint: str,
         credential: AzureKeyCredential,
         bridge: VoiceAssistantBridge,
-        model: str = "gpt-realtime",
-        voice: str = "en-US-Ava:DragonHDLatestNeural",  # Valid VoiceLive API voice
+        model: str = None,
+        voice: str = None,
+        transcribe_model: str = None,
         instructions: str = "",
         tools: list = None,
         websocket_callback: Optional[Callable] = None,
@@ -158,8 +159,9 @@ class WebSocketVoiceClient:
         self.client_id = client_id
         self.endpoint = endpoint
         self.credential = credential
-        self.model = model
-        self.voice = voice
+        self.model = model or os.getenv("VOICELIVE_MODEL", "gpt-realtime")
+        self.voice = voice or os.getenv("VOICELIVE_VOICE", "en-US-Ava:DragonHDLatestNeural")
+        self.transcribe_model = transcribe_model or os.getenv("VOICELIVE_TRANSCRIBE_MODEL", "gpt-4o-transcribe")
         self.instructions = instructions
         self.tools = tools or []
         self.websocket_callback = websocket_callback
@@ -242,7 +244,7 @@ class WebSocketVoiceClient:
                     input_audio_format=InputAudioFormat.PCM16,
                     output_audio_format=OutputAudioFormat.PCM16,
                     input_audio_transcription=AudioInputTranscriptionOptions(
-                        model="gpt-4o-transcribe"
+                        model=self.transcribe_model
                     ),
                     turn_detection=AzureSemanticVad(
                         threshold=0.5,

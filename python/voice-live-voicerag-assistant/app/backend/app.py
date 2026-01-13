@@ -62,6 +62,16 @@ async def health_check():
     return {"status": "healthy", "service": "voice-assistant-websocket"}
 
 
+@app.get("/config")
+async def get_config():
+    """Get voice assistant configuration for frontend"""
+    return {
+        "model": os.getenv("VOICELIVE_MODEL", "gpt-realtime"),
+        "voice": os.getenv("VOICELIVE_VOICE", "en-US-Ava:DragonHDLatestNeural"),
+        "transcribeModel": os.getenv("VOICELIVE_TRANSCRIBE_MODEL", "gpt-4o-transcribe"),
+    }
+
+
 # Define WebSocket endpoint
 @app.websocket("/ws/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_id: str):
@@ -168,10 +178,13 @@ async def start_voice_session(client_id: str, config: dict):
             endpoint=endpoint,
             credential=credential,
             bridge=bridge,
-            model=config.get("model", "gpt-realtime"),
+            model=config.get("model", os.getenv("VOICELIVE_MODEL", "gpt-realtime")),
             voice=config.get(
-                "voice", "en-US-Ava:DragonHDLatestNeural"
-            ),  # Valid VoiceLive API voice
+                "voice", os.getenv("VOICELIVE_VOICE", "en-US-Ava:DragonHDLatestNeural")
+            ),
+            transcribe_model=config.get(
+                "transcribeModel", os.getenv("VOICELIVE_TRANSCRIBE_MODEL", "gpt-4o-transcribe")
+            ),
             instructions=instructions,
             tools=tools,
             websocket_callback=stream_audio_to_client,
