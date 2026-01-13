@@ -139,7 +139,12 @@ export default function useVoiceAssistant({
   
   const clientIdRef = useRef(clientId || `client-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`);
   
-    const getWebSocketUrl = () => {
+  // Track whether to honor VAD-triggered stop_playback messages
+  // When muting (stopping listening), we ignore stop_playback because muting shouldn't interrupt playback
+  // When unmuting (starting listening), we honor stop_playback so VAD can trigger barge-in
+  const honorVadInterruptionRef = useRef(false);
+
+  const getWebSocketUrl = () => {
     if (serverUrl) return serverUrl;
     
     // Auto-detect based on current page URL
@@ -315,9 +320,15 @@ export default function useVoiceAssistant({
         break;
 
       case 'stop_playback':
-        console.log('🛑 Stopping audio playback due to user interruption');
-        audioPlayer.stop();
-        onAudioPlaybackStop?.();
+        // Only honor VAD-triggered stop_playback when actively listening (unmuted)
+        // This prevents muting the mic from interrupting playback
+        if (honorVadInterruptionRef.current) {
+          console.log('🛑 Stopping audio playback due to user interruption (VAD barge-in)');
+          audioPlayer.stop();
+          onAudioPlaybackStop?.();
+        } else {
+          console.log('ℹ️ Ignoring stop_playback - microphone is muted');
+        }
         break;
             
       case 'user_speech_ended':
@@ -458,6 +469,13 @@ export default function useVoiceAssistant({
   const isConnecting = readyState === 0; // WebSocket.CONNECTING
   const isDisconnected = readyState === 3; // WebSocket.CLOSED
 
+  // Control whether VAD-triggered stop_playback should be honored
+  // Call with true when starting to listen (unmuting), false when stopping (muting)
+  const setHonorVadInterruption = useCallback((honor: boolean) => {
+    honorVadInterruptionRef.current = honor;
+    console.log(`VAD interruption ${honor ? 'enabled' : 'disabled'}`);
+  }, []);
+
   return {
     // Connection state
     isConnected,
@@ -471,6 +489,7 @@ export default function useVoiceAssistant({
     sendAudio,
     sendAudioChunk, // For real-time audio streaming
     interruptAssistant,
+    setHonorVadInterruption, // Control VAD barge-in behavior
     
     // Audio player controls
     audioPlayer, // Expose audio player for direct control

@@ -27,6 +27,7 @@ from azure.ai.voicelive.models import (
     ServerEventResponseFunctionCallArgumentsDone,
     AudioInputTranscriptionOptions,
     AzureSemanticVad,
+    AzureSemanticDetection,
     MessageItem,
     ResponseCreateParams,
 )
@@ -237,6 +238,35 @@ class WebSocketVoiceClient:
         try:
             # Create session configuration
             try:
+                # Determine if end_of_utterance_detection is supported
+                # It's only supported for cascaded pipelines, not gpt-realtime models
+                realtime_models = ["gpt-realtime", "gpt-realtime-mini", "phi4-mm-realtime"]
+                supports_eou_detection = self.model not in realtime_models
+                
+                # Build turn detection configuration
+                if supports_eou_detection:
+                    turn_detection = AzureSemanticVad(
+                        threshold=0.3,
+                        prefix_padding_ms=300,
+                        speech_duration_ms=80,
+                        silence_duration_ms=500,
+                        remove_filler_words=True,
+                        interrupt_response=True,
+                        end_of_utterance_detection=AzureSemanticDetection(
+                            threshold_level="default",
+                            timeout_ms=1000
+                        )
+                    )
+                else:
+                    turn_detection = AzureSemanticVad(
+                        threshold=0.3,
+                        prefix_padding_ms=300,
+                        speech_duration_ms=80,
+                        silence_duration_ms=500,
+                        remove_filler_words=True,
+                        interrupt_response=True,
+                    )
+                
                 session_config = RequestSession(
                     modalities=[Modality.TEXT, Modality.AUDIO],
                     instructions=self.instructions,
@@ -246,11 +276,7 @@ class WebSocketVoiceClient:
                     input_audio_transcription=AudioInputTranscriptionOptions(
                         model=self.transcribe_model
                     ),
-                    turn_detection=AzureSemanticVad(
-                        threshold=0.5,
-                        prefix_padding_ms=300,
-                        silence_duration_ms=200,
-                    ),
+                    turn_detection=turn_detection,
                     tools=self.tools,
                     tool_choice=ToolChoiceLiteral.AUTO,
                     temperature=0.6,

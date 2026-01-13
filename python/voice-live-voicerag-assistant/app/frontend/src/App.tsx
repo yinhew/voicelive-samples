@@ -37,7 +37,8 @@ function App() {
         startSession,
         stopSession,
         sendAudio,
-        interruptAssistant
+        interruptAssistant,
+        setHonorVadInterruption
     } = useVoiceAssistant({
         onWebSocketOpen: () => {
             console.log("WebSocket connection opened to voice assistant");
@@ -64,7 +65,8 @@ function App() {
         },
         onSpeechStarted: () => {
             console.log("User started speaking");
-            stopAudioPlayer();
+            // Note: Removed automatic stopAudioPlayer() to allow pure mute/unmute
+            // Use the Interrupt button to manually stop assistant playback
         },
         onSpeechStopped: () => {
             console.log("User stopped speaking");
@@ -174,9 +176,14 @@ function App() {
 
     const onToggleListening = async () => {
         if (!isRecording && isSessionActive) {
+            // Starting to listen (unmuting) - enable VAD-triggered barge-in
+            setHonorVadInterruption(true);
             await startAudioRecording();
             setIsRecording(true);
         } else if (isRecording) {
+            // Stopping listening (muting) - disable VAD-triggered barge-in first
+            // This prevents the mute action from triggering a stop_playback
+            setHonorVadInterruption(false);
             await stopAudioRecording();
             setIsRecording(false);
         }
