@@ -6,10 +6,12 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "eslint src",
     "format": "prettier --write src"
   },
   "dependencies": {
+    "@azure/ai-voicelive": "1.0.0-alpha.20260205.1",
+    "@azure/core-auth": "^1.10.0",
     "@azure/search-documents": "^12.1.0",
     "@radix-ui/react-accordion": "^1.2.1",
     "@radix-ui/react-checkbox": "^1.1.2",
@@ -20,6 +22,7 @@
     "@radix-ui/react-slider": "^1.2.1",
     "@radix-ui/react-slot": "^1.1.0",
     "@radix-ui/react-switch": "^1.1.1",
+    "@tailwindcss/postcss": "^4.1.18",
     "class-variance-authority": "^0.7.0",
     "lucide-react": "^0.453.0",
     "microsoft-cognitiveservices-speech-sdk": "^1.44.1",
@@ -27,19 +30,20 @@
     "react": "19.2.1",
     "react-dom": "19.2.1",
     "react-markdown": "^9.0.3",
-    "rt-client": "./rt-client-0.5.3.tgz",
     "tailwind-merge": "^2.5.4",
     "tailwindcss-animate": "^1.0.7"
   },
   "devDependencies": {
-    "@types/node": "^20",
+    "@eslint/eslintrc": "^3.3.3",
+    "@types/node": "^25",
     "@types/react": "^18",
     "@types/react-dom": "^18",
-    "eslint": "^8",
-    "eslint-config-next": "15.0.1",
+    "baseline-browser-mapping": "^2.9.19",
+    "eslint": "^9.39.2",
+    "eslint-config-next": "16.1.6",
     "postcss": "^8",
-    "prettier": "^3.3.3",
-    "tailwindcss": "^3.4.1",
+    "prettier": "^3.8.1",
+    "tailwindcss": "^4.1.18",
     "typescript": "5.9.3"
   }
 }

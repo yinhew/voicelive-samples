@@ -6,7 +6,11 @@ from aiohttp import web
 from azure.ai.agents.aio import AgentsClient
 from azure.identity.aio import DefaultAzureCredential, get_bearer_token_provider
 import logging
+import dotenv
 
+dotenv.load_dotenv()
+
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 get_token = get_bearer_token_provider(DefaultAzureCredential(), "https://ai.azure.com/.default")
