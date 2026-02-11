@@ -6,7 +6,7 @@ RUN tdnf distro-sync -y && \
 
 WORKDIR /web
 COPY package*.json ./
-RUN npm ci
+RUN npm install
 COPY . .
 RUN npm run lint
 RUN npm run build
