@@ -39,7 +39,14 @@ Then open your web browser and navigate to [http://localhost:3000](http://localh
 
 * Step 1: Under the `Connection Settings` section, fill `Azure AI Services Endpoint` and `Subscription Key`, which can be obtained from the `Keys and Endpoint` tab in your Azure AI Services resource. The endpoint can be the regional endpoint (e.g., `https://<region>.api.cognitive.microsoft.com/`) or a custom domain endpoint (e.g., `https://<custom-domain>.cognitiveservices.azure.com/`).
 
-* Step 2: Under `Conversation Settings` section, toggle the `Avatar` switch to enable avatar feature. Then select an avatar from the `Avatar` dropdown list. Toggle `Use Photo Avatar` switch if you want to use photo avatar. Then choose a prebuilt avatar character from the dropdown list below. If you want to use a custom avatar, toggle the `Use Custom Avatar` switch and fill the character name in the `Character` field below.
+* Step 2: Under `Conversation Settings` section, configure the avatar:
+  - **Enable Avatar**: Toggle the `Avatar` switch to enable the avatar feature.
+  - **Avatar Type**: By default, a prebuilt avatar is used. Select a character from the `Avatar` dropdown list.
+    - To use a **photo avatar**, toggle the `Use Photo Avatar` switch and select a prebuilt photo avatar character from the dropdown list.
+    - To use a **custom avatar**, toggle the `Use Custom Avatar` switch and enter the character name in the `Character` field.
+  - **Avatar Output Mode**: Choose between `WebRTC` (default, real-time streaming) and `WebSocket` (streams video data over the WebSocket connection).
+  - **Avatar Background Image URL** *(optional)*: Enter a URL to set a custom background image for the avatar.
+  - **Scene Settings** *(photo avatar only)*: When using a photo avatar, adjust scene parameters such as `Zoom`, `Position X/Y`, `Rotation X/Y/Z`, and `Amplitude`. These settings can also be adjusted live after connecting.
 
 * Step 3: Click `Connect` button to start the conversation. Once connected, you should see the avatar appearing on the page, and you can click `Turn on microphone` and start talking with the avatar with speech.
 
