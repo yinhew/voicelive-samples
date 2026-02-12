@@ -23,7 +23,7 @@ export class ProactiveEventManager {
     /**
      * Updates the last activity time to the current time
      */
-    public updateActivity(activityName: string =  ""): void { // eslint-disable-line
+    public updateActivity(activityName: string =  ""): void {  
         this.lastActivityTime = new Date();
     }
 

@@ -35,18 +35,25 @@ import { Power, Send } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import {
-  AvatarConfigVideoParams,
+  VoiceLiveClient,
+  VoiceLiveSession,
+  VoiceLiveSubscription,
   Voice,
-  EOUDetection,
-  isFunctionCallItem,
-  isMCPCallItem,
-  Modality,
-  RTClient,
-  RTInputAudioItem,
-  RTResponse,
+  AzureVoice,
+  OpenAIVoice,
   TurnDetection,
-} from "rt-client";
-import { SearchClient, AzureKeyCredential } from "@azure/search-documents";
+  Modality,
+  RequestSession,
+  FunctionCallOutputItem,
+  ResponseMCPApprovalRequestItem,
+  ResponseFoundryAgentCallItem,
+  ServerEventResponseFoundryAgentCallArgumentsDone,
+  ServerEventResponseFoundryAgentCallInProgress,
+  KnownServerEventType,
+  SystemMessageItem,
+} from "@azure/ai-voicelive";
+import { AzureKeyCredential, TokenCredential } from "@azure/core-auth";
+import { SearchClient } from "@azure/search-documents";
 import "./index.css";
 import {
   clearChatSvg,
@@ -56,9 +63,44 @@ import {
   settingsSvg,
 } from "./svg";
 import * as speechSDK from "microsoft-cognitiveservices-speech-sdk";
+import { log } from "console";
+
+// Type for avatar config video params (local definition since SDK types may differ)
+interface AvatarConfigVideoParams {
+  codec?: string;
+  crop?: {
+    top_left: [number, number];
+    bottom_right: [number, number];
+  };
+  background?: {
+    image_url?: URL;
+  };
+}
+
+// Type for EOUDetection
+interface EOUDetection {
+  model: string;
+}
+
 interface Message {
-  type: "user" | "assistant" | "status" | "error";
+  type: "user" | "assistant" | "status" | "error" | "mcp_approval" | "foundry_agent";
   content: string;
+  id?: string; // Optional ID for tracking streaming messages
+  // MCP approval request fields
+  mcpApproval?: {
+    approvalRequestId: string;
+    serverLabel: string;
+    name: string;
+    arguments: string;
+    handled?: boolean;
+  };
+  // Foundry agent call tracking fields
+  foundryAgent?: {
+    name: string;
+    arguments?: string;
+    agentResponseId?: string;
+    output?: string;
+  };
 }
 
 interface ToolDeclaration {
@@ -230,6 +272,10 @@ const getMessageClassNames = (type: Message["type"]): string => {
       return "bg-gray-100 mr-auto max-w-[80%]";
     case "status":
       return "bg-yellow-200 mx-auto max-w-[80%]";
+    case "mcp_approval":
+      return "bg-purple-100 mx-auto max-w-[80%] border border-purple-300";
+    case "foundry_agent":
+      return "bg-blue-50 mx-auto max-w-[80%] border border-blue-300";
     default:
       return "bg-red-100 mx-auto max-w-[80%]";
   }
@@ -503,19 +549,7 @@ const ChatInterface = () => {
   const [apiKey, setApiKey] = useState("");
   const [endpoint, setEndpoint] = useState("");
   const [entraToken, setEntraToken] = useState("");
-  const clientAuth = useRef<
-    | {
-        getToken: (_: string) => Promise<{
-          token: string;
-          expiresOnTimestamp: number;
-        }>;
-        key?: undefined;
-      }
-    | {
-        key: string;
-        getToken?: undefined;
-      }
-  >({ key: "" });
+  const credentialRef = useRef<AzureKeyCredential | TokenCredential | null>(null);
   const [model, setModel] = useState("gpt-realtime");
   const [searchEndpoint, setSearchEndpoint] = useState("");
   const [searchApiKey, setSearchApiKey] = useState("");
@@ -524,11 +558,12 @@ const ChatInterface = () => {
   const [searchIdentifierField, setSearchIdentifierField] =
     useState("chunk_id");
   const [recognitionLanguage, setRecognitionLanguage] = useState("auto");
+  const [srModel, setSrModel] = useState<"azure-speech" | "mai-ears-1">("azure-speech");
   const [phraseList, setPhraseList] = useState<string[]>([]);
   const [customSpeechModels, setCustomSpeechModels] = useState<Record<string, string>>({});
   const [useNS, setUseNS] = useState(false);
   const [useEC, setUseEC] = useState(false);
-  const [turnDetectionType, setTurnDetectionType] = useState<TurnDetection>({
+  const [turnDetectionType, setTurnDetectionType] = useState<TurnDetection | null>({
     type: "server_vad",
   });
   const [eouDetectionType, setEouDetectionType] = useState<string>("none");
@@ -574,6 +609,8 @@ const ChatInterface = () => {
   const [isAvatar, setIsAvatar] = useState(true);
   const [isPhotoAvatar, setIsPhotoAvatar] = useState(false);
   const [isCustomAvatar, setIsCustomAvatar] = useState(false);
+  // Avatar output mode: 'webrtc' or 'websocket'
+  const [avatarOutputMode, setAvatarOutputMode] = useState<"webrtc" | "websocket">("webrtc");
   // Scene parameters for photo avatar
   const [sceneZoom, setSceneZoom] = useState(100.0);
   const [scenePositionX, setScenePositionX] = useState(0.0);
@@ -609,16 +646,31 @@ const ChatInterface = () => {
   const [agents, setAgents] = useState<{ id: string; name: string }[]>([]);
   const [isMobile, setIsMobile] = useState(false);
 
-  const clientRef = useRef<RTClient | null>(null);
+  const clientRef = useRef<VoiceLiveClient | null>(null);
+  const sessionRef = useRef<VoiceLiveSession | null>(null);
+  const subscriptionRef = useRef<VoiceLiveSubscription | null>(null);
   const audioHandlerRef = useRef<AudioHandler | null>(null);
   const proactiveManagerRef = useRef<ProactiveEventManager | null>(null);
   const videoRef = useRef<HTMLDivElement>(null);
+  const wsVideoRef = useRef<HTMLVideoElement>(null);
+  const mediaSourceRef = useRef<MediaSource | null>(null);
+  const sourceBufferRef = useRef<SourceBuffer | null>(null);
+  const videoChunksQueueRef = useRef<BufferSource[]>([]);
+  const pendingVideoElementRef = useRef<HTMLVideoElement | null>(null);
   const isUserSpeaking = useRef(false);
+  const avatarOutputModeRef = useRef<"webrtc" | "websocket">("webrtc");
   const searchClientRef = useRef<SearchClient<object> | null>(null);
   const animationRef = useRef(null);
   const settingsRef = useRef<HTMLDivElement>(null);
+  // Track current streaming message for real-time updates
+  const currentStreamingMessageRef = useRef<{ id: string; content: string } | null>(null);
 
   const isEnableAvatar = isAvatar && (avatarName || photoAvatarName || customAvatarName);
+
+  // Keep avatarOutputModeRef in sync with state for use in event handlers
+  useEffect(() => {
+    avatarOutputModeRef.current = avatarOutputMode;
+  }, [avatarOutputMode]);
 
   // Default instructions for foundry agent tools
   const defaultFoundryInstructions = "You are a helpful assistant with tools. Please response a short message like 'I am working on this', 'getting the information for you, please wait' before calling the function. The response can be varied based on the question.";
@@ -679,6 +731,347 @@ const ChatInterface = () => {
     fetchConfig();
   }, []);
 
+  // Setup subscription handlers for VoiceLive events
+  const setupEventSubscription = () => {
+    if (!sessionRef.current) return;
+
+    subscriptionRef.current = sessionRef.current.subscribe({
+      // Handle session connected
+      onConnected: async (_event, context) => {
+        console.log("Session connected, sessionId:", context.sessionId);
+        if (context.sessionId) {
+          setSessionId(context.sessionId);
+        }
+      },
+
+      // Handle session created - update sessionId when received
+      onSessionCreated: async (event, context) => {
+        console.log("Session created event received:", event, context);
+        const sid = context.sessionId || event.session?.id;
+        if (sid) {
+          setSessionId(sid);
+          // Update the "connecting..." message with actual session ID
+          setMessages((prev) => {
+            // Find and update the connecting status message
+            const connectingIdx = prev.findIndex(m => m.content.includes("debug id: connecting..."));
+            if (connectingIdx >= 0) {
+              const updated = [...prev];
+              updated[connectingIdx] = {
+                type: "status",
+                content: "Session started, click on the mic button to start conversation! debug id: " + sid,
+              };
+              return updated;
+            }
+            return prev;
+          });
+        }
+      },
+
+      // Handle session errors
+      onError: async (error, _context) => {
+        console.error("Session error:", error);
+        setMessages((prev) => [
+          ...prev,
+          { type: "error", content: `Session error: ${error.error?.message || "Unknown error"}` },
+        ]);
+      },
+
+      // Handle when a new response is created
+      onResponseCreated: async (event, _context) => {
+        // Start a new streaming message with unique ID
+        const messageId = event.response?.id || Date.now().toString();
+        currentStreamingMessageRef.current = {
+          id: messageId,
+          content: "",
+        };
+        setMessages((prev) => [...prev, { type: "assistant", content: "", id: messageId }]);
+      },
+
+      // Handle text delta streaming
+      onResponseTextDelta: async (event, _context) => {
+        if (currentStreamingMessageRef.current && event.delta) {
+          currentStreamingMessageRef.current.content += event.delta;
+          const targetId = currentStreamingMessageRef.current.id;
+          const newContent = currentStreamingMessageRef.current.content;
+          setMessages((prev) => {
+            // Find the message by ID to handle out-of-order events
+            const idx = prev.findIndex((m) => m.id === targetId);
+            if (idx >= 0) {
+              const updated = [...prev];
+              updated[idx] = { ...updated[idx], content: newContent };
+              return updated;
+            }
+            return prev;
+          });
+        }
+      },
+
+      // Handle audio transcription delta (assistant's response transcript)
+      onResponseAudioTranscriptDelta: async (event, _context) => {
+        if (currentStreamingMessageRef.current && event.delta) {
+          currentStreamingMessageRef.current.content += event.delta;
+          const targetId = currentStreamingMessageRef.current.id;
+          const newContent = currentStreamingMessageRef.current.content;
+          setMessages((prev) => {
+            // Find the message by ID to handle out-of-order events
+            const idx = prev.findIndex((m) => m.id === targetId);
+            if (idx >= 0) {
+              const updated = [...prev];
+              updated[idx] = { ...updated[idx], content: newContent };
+              return updated;
+            }
+            return prev;
+          });
+        }
+      },
+
+      // Handle audio delta (play audio chunks)
+      onResponseAudioDelta: async (event, _context) => {
+        if (event.delta) {
+          if (audioHandlerRef.current?.isPlaying === false) {
+            audioHandlerRef.current?.startStreamingPlayback();
+          }
+          // delta is already a Uint8Array in the new SDK
+          audioHandlerRef.current?.playChunk(event.delta, async () => {
+            proactiveManagerRef.current?.updateActivity("agent speaking");
+          });
+        }
+      },
+
+      // Handle response done
+      onResponseDone: async (_event, _context) => {
+        currentStreamingMessageRef.current = null;
+        referenceText.current = "";
+        audioChunksForPA.current = [];
+      },
+
+      // Handle user speech transcription completed
+      onConversationItemInputAudioTranscriptionCompleted: async (event, _context) => {
+        // Find the message by itemId and update the content with transcription
+        const itemId = event.itemId;
+        if (itemId) {
+          setMessages((prev) => {
+            const existingIdx = prev.findIndex((m) => m.id === itemId);
+            if (existingIdx >= 0) {
+              // Update existing message with transcription
+              const updated = [...prev];
+              updated[existingIdx] = {
+                ...updated[existingIdx],
+                content: event.transcript || "",
+              };
+              return updated;
+            }
+            // If no existing message found, create a new one
+            return [...prev, { type: "user", content: event.transcript || "", id: itemId }];
+          });
+        } else {
+          // Fallback: add as new message if no itemId
+          setMessages((prev) => [
+            ...prev,
+            { type: "user", content: event.transcript || "" },
+          ]);
+        }
+        referenceText.current = event.transcript || "";
+      },
+
+      // Handle user started speaking (for barge-in)
+      onInputAudioBufferSpeechStarted: async (event, _context) => {
+        isUserSpeaking.current = true;
+        proactiveManagerRef.current?.updateActivity("user start to speak");
+        audioHandlerRef.current?.stopStreamingPlayback();
+        // Create a placeholder message for the user with the item ID
+        const itemId = event.itemId;
+        if (itemId) {
+          setMessages((prev) => [
+            ...prev,
+            { type: "user", content: "...", id: itemId },
+          ]);
+        }
+      },
+
+      // Handle user stopped speaking
+      onInputAudioBufferSpeechStopped: async (_event, _context) => {
+        isUserSpeaking.current = false;
+      },
+
+      // Handle function call arguments done
+      onResponseFunctionCallArgumentsDone: async (event, _context) => {
+        console.log("Function call:", event.name, event.arguments);
+        
+        if (event.name === "get_time") {
+          const formattedTime = new Date().toLocaleString("en-US", {
+            weekday: "long",
+            year: "numeric",
+            month: "long",
+            day: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            timeZoneName: "short",
+          });
+          await sessionRef.current?.addConversationItem({
+            type: "function_call_output",
+            callId: event.callId,
+            output: formattedTime,
+          } as FunctionCallOutputItem);
+          await sessionRef.current?.sendEvent({ type: "response.create" });
+        } else if (event.name === "search") {
+          const query = JSON.parse(event.arguments || "{}").query;
+          if (searchClientRef.current && query) {
+            setMessages((prev) => [
+              ...prev,
+              { type: "status", content: `Searching [${query}]...` },
+            ]);
+            const searchResults = await searchClientRef.current.search(query, {
+              top: 5,
+              queryType: "semantic",
+              semanticSearchOptions: { configurationName: "default" },
+              select: [searchContentField, searchIdentifierField],
+            });
+            let resultText = "";
+            for await (const result of searchResults.results) {
+               
+              const document = result.document as any;
+              resultText += `[${document[searchIdentifierField]}]: ${document[searchContentField]}\n-----\n`;
+            }
+            await sessionRef.current?.addConversationItem({
+              type: "function_call_output",
+              callId: event.callId,
+              output: resultText,
+            } as FunctionCallOutputItem);
+            await sessionRef.current?.sendEvent({ type: "response.create" });
+          }
+        } else if (event.name === "pronunciation_assessment") {
+          const PAResult = await startPAWithStream();
+          await sessionRef.current?.addConversationItem({
+            type: "function_call_output",
+            callId: event.callId,
+            output: PAResult,
+          } as FunctionCallOutputItem);
+          await sessionRef.current?.sendEvent({ type: "response.create" });
+          referenceText.current = "";
+          audioChunksForPA.current = [];
+        }
+      },
+
+      onConversationItemCreated: async (event, _context) => {
+        console.log("Conversation item created:", event);
+        if (event.item && event.item.type === "mcp_approval_request") {
+          const approvalItem = event.item as ResponseMCPApprovalRequestItem;
+          const messageId = approvalItem.id || Date.now().toString();
+          setMessages((prev) => [
+            ...prev,
+            {
+              type: "mcp_approval",
+              content: `MCP Tool Approval Request`,
+              id: messageId,
+              mcpApproval: {
+                approvalRequestId: approvalItem.id || "",
+                serverLabel: approvalItem.serverLabel || "Unknown Server",
+                name: approvalItem.name || "Unknown Tool",
+                arguments: approvalItem.arguments || "{}",
+                handled: false,
+              },
+            },
+          ]);
+        }
+        else if (event.item && event.item.type === "foundry_agent_call") {
+          const foundryCallItem = event.item as ResponseFoundryAgentCallItem;
+          const messageId = foundryCallItem.id || Date.now().toString();
+          setMessages((prev) => [
+            ...prev,
+            {
+              type: "foundry_agent",
+              content: `Foundry Agent "${foundryCallItem.name || "Unknown"}" is triggered`,
+              id: messageId,
+              foundryAgent: {
+                name: foundryCallItem.name || "Unknown",
+              },
+            },
+          ]);
+        }
+      },
+
+      onResponseOutputItemDone: async (event, _context) => {
+        if (event.item && event.item.type === "foundry_agent_call") {
+          const foundryCallItem = event.item as ResponseFoundryAgentCallItem;
+          const messageId = foundryCallItem.id;
+          if (messageId) {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === messageId && m.foundryAgent
+                  ? {
+                      ...m,
+                      foundryAgent: {
+                        ...m.foundryAgent,
+                        output: foundryCallItem.output || "(no output)",
+                      },
+                    }
+                  : m
+              )
+            );
+          }
+        }
+      },
+
+      // Handle all server events as catch-all for video and MCP
+      onServerEvent: async (event, _context) => {
+         
+        const anyEvent = event as any;
+        // Note: response.video.delta is handled via monkey-patch in session setup
+        // because the SDK's message parser drops unknown event types
+
+        // Handle MCP call completed - trigger response generation
+        if (anyEvent.type === KnownServerEventType.ResponseMcpCallCompleted) {
+          console.log("MCP call completed, triggering response.create");
+          await sessionRef.current?.sendEvent({ type: "response.create" });
+        }
+
+        // Handle Foundry Agent call arguments done
+        if (anyEvent.type === KnownServerEventType.ResponseFoundryAgentCallArgumentsDone) {
+          const foundryCallArgsEvent = event as ServerEventResponseFoundryAgentCallArgumentsDone;
+          const messageId = foundryCallArgsEvent.itemId;
+          if (messageId) {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === messageId && m.foundryAgent
+                  ? {
+                      ...m,
+                      foundryAgent: {
+                        ...m.foundryAgent,
+                        arguments: foundryCallArgsEvent.arguments || "{}",
+                      },
+                    }
+                  : m
+              )
+            );
+          }
+        }
+
+        // Handle Foundry Agent call in progress
+        if (anyEvent.type === KnownServerEventType.ResponseFoundryAgentCallInProgress) {
+          const foundryCallInProgressEvent = event as ServerEventResponseFoundryAgentCallInProgress;
+          const messageId = foundryCallInProgressEvent.itemId;
+          if (messageId && foundryCallInProgressEvent.agentResponseId) {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === messageId && m.foundryAgent
+                  ? {
+                      ...m,
+                      foundryAgent: {
+                        ...m.foundryAgent,
+                        agentResponseId: foundryCallInProgressEvent.agentResponseId,
+                      },
+                    }
+                  : m
+              )
+            );
+          }
+        }
+      }
+    });
+  };
+
   const handleConnect = async () => {
     if (!isConnected) {
       try {
@@ -703,22 +1096,22 @@ const ChatInterface = () => {
           }
         }
 
-        // Use agent fields if in agent mode
-        clientAuth.current = entraToken
+        // Set up credentials for the new SDK
+        credentialRef.current = entraToken
           ? {
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            getToken: async (_: string) => ({
-              token: entraToken,
-              expiresOnTimestamp: Date.now() + 3600000,
+              getToken: async () => ({
+                token: entraToken,
+                expiresOnTimestamp: Date.now() + 3600000,
               }),
             }
-          : { key: apiKey };
-        if (mode === "agent" && !agentId) {
+          : new AzureKeyCredential(apiKey);
+
+        if (mode === "agent" && (!agentId || !agentProjectName)) {
           setMessages((prevMessages) => [
             ...prevMessages,
             {
               type: "error",
-              content: "Please input/select an agent.",
+              content: "Please input/select an agent and project name.",
             },
           ]);
           return;
@@ -733,49 +1126,102 @@ const ChatInterface = () => {
           ]);
           return;
         }
-        clientRef.current = new RTClient(
-          new URL(endpoint),
-          clientAuth.current,
-          mode === "agent"
-            ? {
-                modelOrAgent: {
-                  agentId: agentId,
-                  projectName: agentProjectName,
-                },
-                apiVersion: "2026-01-01-preview",
+
+        // Determine endpoint and model based on mode
+        let sessionEndpoint = endpoint;
+        let sessionModel: string;
+        try {
+          if (mode === "agent") {
+            // For agent mode, use placeholder model (server uses query params for agent routing)
+            sessionModel = "agent";
+            const url = new URL(sessionEndpoint);
+            url.searchParams.set("agent-id", agentId);
+            url.searchParams.set("agent-project-name", agentProjectName);
+            sessionEndpoint = url.toString();
+          } else if (mode === "agent-v2") {
+            // For agent-v2 mode, use placeholder model (server uses query params for agent routing)
+            sessionModel = "agent-v2";
+            const url = new URL(sessionEndpoint);
+            url.searchParams.set("agent-name", agentName);
+            url.searchParams.set("agent-project-name", agentProjectName);
+            sessionEndpoint = url.toString();
+          } else {
+            sessionModel = model;
+          }
+        } catch (error) {
+          console.error("Invalid endpoint URL:", error);
+          setMessages((prevMessages) => [
+            ...prevMessages,
+            {
+              type: "error",
+              content: "Invalid endpoint URL. Please check the endpoint format.",
+            },
+          ]);
+          return;
+        }
+
+        // Create VoiceLiveClient with apiVersion option
+        clientRef.current = new VoiceLiveClient(sessionEndpoint, credentialRef.current!, {
+          apiVersion: "2026-01-01-preview",
+        });
+
+        // Start session with the model
+        sessionRef.current = await clientRef.current.startSession(sessionModel);
+        
+        // Monkey-patch the session to intercept raw messages for response.video.delta
+        // The SDK's message parser drops unknown event types like response.video.delta
+         
+        const session = sessionRef.current as any;
+        if (session._handleIncomingMessage) {
+          const originalHandler = session._handleIncomingMessage.bind(session);
+          session._handleIncomingMessage = (data: string | ArrayBuffer) => {
+            // First, call the original handler
+            originalHandler(data);
+
+            // Then, check for response.video.delta which the SDK drops
+            try {
+              const messageText = typeof data === "string" ? data : new TextDecoder().decode(data);
+              const parsed = JSON.parse(messageText);
+              if (parsed.type === "response.video.delta" && parsed.delta) {
+                // Handle video chunk directly since SDK drops this event type
+                if (avatarOutputModeRef.current === "websocket") {
+                  handleVideoChunk(parsed.delta);
+                }
               }
-            : mode === "agent-v2"
-              ? {
-                  modelOrAgent: {
-                    agentName: agentName,
-                    projectName: agentProjectName,
-                  },
-                  apiVersion: "2026-01-01-preview",
-                }
-              : {
-                  modelOrAgent: model,
-                  apiVersion: "2026-01-01-preview",
-                }
-        );
-        console.log("Client created:", clientRef.current.connectAvatar);
+            } catch {
+              // Ignore parsing errors
+            }
+          };
+        }
+
+        // Start event subscription immediately after session is created to catch all events
+        setupEventSubscription();
+        
+        console.log("Session created, sessionId:", sessionRef.current.sessionId);
         const modalities: Modality[] = ["text", "audio"];
-        const turnDetection: TurnDetection = turnDetectionType;
+        
+        // Build turn detection config
+         
+        const turnDetectionConfig: any = turnDetectionType ? { ...turnDetectionType } : undefined;
         if (
-          turnDetection &&
+          turnDetectionConfig &&
           eouDetectionType !== "none" &&
           isCascaded(mode, model)
         ) {
-          turnDetection.end_of_utterance_detection = {
+          turnDetectionConfig.endOfUtteranceDetection = {
             model: eouDetectionType,
-          } as EOUDetection;
+          };
         }
-        if (turnDetection?.type === "azure_semantic_vad") {
-          turnDetection.remove_filler_words = removeFillerWords;
+        if (turnDetectionConfig?.type === "azure_semantic_vad") {
+          turnDetectionConfig.removeFillerWords = removeFillerWords;
         }
-        const voice: Voice = voiceType === "custom"
+        
+        // Build voice config for the new SDK
+         
+        const voiceConfig: any = voiceType === "custom"
           ? {
               name: customVoiceName,
-              endpoint_id: voiceDeploymentId,
+              endpointId: voiceDeploymentId,
               temperature: customVoiceName.toLowerCase().includes("dragonhd")
                 ? voiceTemperature
                 : undefined,
@@ -798,7 +1244,8 @@ const ChatInterface = () => {
                     : undefined,
                   rate: voiceSpeed.toString(),
                 }
-              : (voiceName as Voice);
+              : { name: voiceName, type: "openai" };
+              
         if (enableSearch) {
           searchClientRef.current = new SearchClient(
             searchEndpoint,
@@ -810,73 +1257,142 @@ const ChatInterface = () => {
         const effectiveInstructions = foundryAgentTools.length > 0 && (!instructions || instructions.length === 0)
           ? defaultFoundryInstructions
           : instructions;
-        const session = await clientRef.current.configure({
+          
+        // Get avatar config before updating session
+        const avatarConfig = getAvatarConfig();
+        
+        // Build tools array - only include if there are actual tools
+        const allTools = [
+          ...(tools || []),
+          ...(mcpServers || []).map((mcp) => ({
+            type: "mcp" as const,
+            serverUrl: mcp.serverUrl,
+            authorization: mcp.authorization || undefined,
+            serverLabel: mcp.serverLabel,
+            requireApproval: mcp.requireApproval ? "always" : "never",
+          })),
+          ...(foundryAgentTools || []).map((tool) => ({
+            type: "foundry_agent" as const,
+            agentName: tool.agentName,
+            agentVersion: tool.agentVersion,
+            projectName: tool.projectName,
+            description: tool.description || undefined,
+            clientId: tool.clientId || undefined,
+          })),
+        ];
+        
+        // Update session configuration using the new SDK pattern
+        await sessionRef.current!.updateSession({
           instructions: effectiveInstructions?.length > 0 ? effectiveInstructions : undefined,
-          input_audio_transcription: {
-            model: model.includes("gpt") && model.includes("realtime")
+          inputAudioTranscription: {
+            model: mode === "model" && model.includes("gpt") && model.includes("realtime")
               ? "whisper-1"
-              : "azure-speech",
+              : srModel,
+            // Language cannot be configured for mai-ears-1 model
             language:
-              recognitionLanguage === "auto" ? undefined : recognitionLanguage,
-            phrase_list: phraseList.length > 0 ? phraseList : undefined,
-            custom_speech: Object.keys(customSpeechModels).length > 0 ? customSpeechModels : undefined,
+              srModel === "mai-ears-1" ? undefined : (recognitionLanguage === "auto" ? undefined : recognitionLanguage),
+            phraseList: phraseList.length > 0 ? phraseList : undefined,
+            customSpeech: Object.keys(customSpeechModels).length > 0 ? customSpeechModels : undefined,
           },
-          turn_detection: turnDetection,
-          voice: voice,
-          avatar: getAvatarConfig(),
-          tools: [
-            ...tools,
-            ...mcpServers.map((mcp) => ({
-              type: "mcp" as const,
-              server_url: mcp.serverUrl,
-              authorization: mcp.authorization || undefined,
-              server_label: mcp.serverLabel,
-              require_approval: mcp.requireApproval ? "always" : "never",
-            })),
-            ...foundryAgentTools.map((tool) => ({
-              type: "foundry_agent" as const,
-              agent_name: tool.agentName,
-              agent_version: tool.agentVersion,
-              project_name: tool.projectName,
-              description: tool.description || undefined,
-              client_id: tool.clientId || undefined,
-            })),
-          ],
-          temperature,
+          turnDetection: turnDetectionConfig,
+          voice: voiceConfig,
+          avatar: avatarConfig,
+          tools: allTools.length > 0 ? allTools : undefined,
+          // Temperature is not supported in agent-v2 mode (configured in agent definition)
+          temperature: mode === "agent-v2" ? undefined : temperature,
           modalities,
-          input_audio_noise_reduction: useNS
+          inputAudioNoiseReduction: useNS
             ? {
-                type: "azure_deep_noise_suppression",
+                type: "azure_deep_noise_suppression" as const,
               }
-            : null,
-          input_audio_echo_cancellation: useEC
+            : undefined,
+          inputAudioEchoCancellation: useEC
             ? {
-                type: "server_echo_cancellation",
+                type: "server_echo_cancellation" as const,
               }
-            : null,
+            : undefined,
         });
-        if (session?.avatar) {
-          await getLocalDescription(session.avatar?.ice_servers);
+
+        // For photo avatar, send an additional session.update with scene config
+        // using sendRawEvent to bypass SDK serialization which strips 'scene' property
+        // Build minimal avatar config for scene - without outputProtocol, video, crop
+        if (isPhotoAvatar && avatarConfig?.scene) {
+          const sceneAvatarConfig = isCustomAvatar
+            ? {
+                type: "photo-avatar",
+                model: "vasa-1",
+                character: customAvatarName,
+                customized: true,
+                scene: avatarConfig.scene,
+              }
+            : {
+                type: "photo-avatar",
+                model: "vasa-1",
+                character: photoAvatarName.split("-")[0].toLowerCase(),
+                style: photoAvatarName.split("-").slice(1).join("-"),
+                scene: avatarConfig.scene,
+              };
+          await sendRawEvent({
+            type: "session.update",
+            session: {
+              avatar: sceneAvatarConfig,
+            },
+          });
         }
 
-        startResponseListener();
+        // Setup avatar if enabled
+        if (isAvatar && avatarConfig) {
+          if (avatarOutputMode === "webrtc") {
+            // For WebRTC, subscribe to session.updated to get ICE servers, then initiate connection
+            const iceServersPromise = new Promise<RTCIceServer[] | undefined>((resolve) => {
+              const timeout = setTimeout(() => {
+                console.log("ICE servers timeout, proceeding without ICE servers");
+                resolve(undefined);
+              }, 5000);
+              
+              const tempSub = sessionRef.current!.subscribe({
+                onSessionUpdated: async (event) => {
+                  clearTimeout(timeout);
+                   
+                  const avatarInfo = (event.session as any)?.avatar;
+                  if (avatarInfo?.iceServers) {
+                    console.log("Received ICE servers from session.updated:", avatarInfo.iceServers);
+                    resolve(avatarInfo.iceServers);
+                  } else {
+                    console.log("No ICE servers in session.updated, proceeding without");
+                    resolve(undefined);
+                  }
+                  await tempSub.close();
+                },
+              });
+            });
+            
+            const iceServers = await iceServersPromise;
+            await getLocalDescription(iceServers);
+          } else {
+            // Setup MediaSource before setIsConnected - video element will be appended via useEffect
+            setupWebSocketVideoPlayback();
+          }
+        }
+
         // Start recording the session
         if (audioHandlerRef.current) {
           audioHandlerRef.current.startSessionRecording();
         }
 
         setIsConnected(true);
+        // Get session ID - may be available now or will be updated via onSessionCreated handler
+        const currentSessionId = sessionRef.current?.sessionId || "connecting...";
+        setSessionId(currentSessionId);
         setMessages((prevMessages) => [
           ...prevMessages,
           {
             type: "status",
             content:
               "Session started, click on the mic button to start conversation! debug id: " +
-              session.id,
+              currentSessionId,
           },
         ]);
-
-        setSessionId(session.id);
 
         if (enableProactive) {
           proactiveManagerRef.current = new ProactiveEventManager(
@@ -905,9 +1421,20 @@ const ChatInterface = () => {
   };
 
   const whenGreeting = async () => {
-    if (clientRef.current) {
+    if (sessionRef.current) {
       try {
-        await clientRef.current.generateResponse({ additional_instructions: " Welcome the user." });
+        await sessionRef.current.addConversationItem({
+          type: "message",
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text: "Please greet the user to start the conversation.",
+            },
+          ],
+        } as SystemMessageItem);
+        // Disable tool calls for greeting
+        await sessionRef.current.sendEvent({ type: "response.create", response: { toolChoice: "none" } });
       } catch (error) {
         console.error("Error generating greeting message:", error);
       }
@@ -915,49 +1442,64 @@ const ChatInterface = () => {
   };
 
   const whenInactive = async () => {
-    if (clientRef.current) {
+    if (sessionRef.current) {
       try {
-        await clientRef.current.sendItem({
+        await sessionRef.current.addConversationItem({
           type: "message",
           role: "system",
           content: [
             {
               type: "input_text",
-              text: "User hasn't response for a while, please say something to continue the conversation.",
+              text: "User hasn't responded for a while, please say something to continue the conversation.",
             },
           ],
-        });
-        await clientRef.current.generateResponse();
+        } as SystemMessageItem);
+        // Disable tool calls for inactivity prompt
+        await sessionRef.current.sendEvent({ type: "response.create", response: { toolChoice: "none" } });
       } catch (error) {
         console.error("Error sending no activity message:", error);
       }
     }
   };
 
-  const getAvatarConfig = () => {
+   
+  const getAvatarConfig = (): any => {
     if (!isAvatar) {
       return undefined;
     }
 
-    const videoParams: AvatarConfigVideoParams = {
+    // Build video params - only include background if URL is provided
+     
+    const videoParams: any = {
       codec: "h264",
       crop: {
-        top_left: [560, 0],
-        bottom_right: [1360, 1080],
+        topLeft: [560, 0],
+        bottomRight: [1360, 1080],
       },
-      background: {
-        image_url: avatarBackgroundImageUrl ? new URL(avatarBackgroundImageUrl) : undefined,
-      }
+    };
+    
+    // Only add background if URL is provided (avoid undefined values)
+    if (avatarBackgroundImageUrl) {
+      videoParams.background = {
+        imageUrl: avatarBackgroundImageUrl,
+      };
+    }
+
+    // Base config with output_protocol
+    const baseConfig = {
+      outputProtocol: avatarOutputMode as "webrtc" | "websocket",
     };
 
     if (isCustomAvatar && customAvatarName && !isPhotoAvatar) {
       return {
+        ...baseConfig,
         character: customAvatarName,
         customized: true,
         video: videoParams,
       };
     } else if (isCustomAvatar && customAvatarName && isPhotoAvatar) {
       return {
+        ...baseConfig,
         type: "photo-avatar",
         model: "vasa-1",
         character: customAvatarName,
@@ -975,12 +1517,14 @@ const ChatInterface = () => {
       };
     } else if (isAvatar && !isCustomAvatar && !isPhotoAvatar) {
       return {
+        ...baseConfig,
         character: avatarName.split("-")[0].toLowerCase(),
         style: avatarName.split("-").slice(1).join("-"),
         video: videoParams,
       };
     } else if (isAvatar && !isCustomAvatar && isPhotoAvatar) {
       return {
+        ...baseConfig,
         type: "photo-avatar",
         model: "vasa-1",
         character: photoAvatarName.split("-")[0].toLowerCase(),
@@ -1001,13 +1545,31 @@ const ChatInterface = () => {
     }
   };
 
+  // Helper function to send raw JSON through the SDK's internal connection manager
+  // This bypasses the SDK's serializer which strips unknown properties like 'scene'
+   
+  const sendRawEvent = async (event: any): Promise<void> => {
+    if (!sessionRef.current) {
+      throw new Error("Session not connected");
+    }
+    // Access the internal connection manager to send raw JSON
+     
+    const session = sessionRef.current as any;
+    if (session._connectionManager?.send) {
+      const serialized = JSON.stringify(event);
+      await session._connectionManager.send(serialized);
+    } else {
+      throw new Error("Cannot access connection manager for raw send");
+    }
+  };
+
   // Ref to track the last time we sent an update (for throttling)
   const lastSceneUpdateRef = useRef<number>(0);
   const sceneUpdateThrottleMs = 50; // Send updates at most every 50ms
 
   // Update avatar scene settings at runtime when connected
   const updateAvatarScene = useCallback(async () => {
-    if (!isConnected || !clientRef.current || !isAvatar || !isPhotoAvatar) {
+    if (!isConnected || !sessionRef.current || !isAvatar || !isPhotoAvatar) {
       return;
     }
 
@@ -1019,7 +1581,8 @@ const ChatInterface = () => {
     lastSceneUpdateRef.current = now;
 
     try {
-      // Build avatar config with required fields plus scene update
+      // Build minimal avatar config for scene update only
+      // Do not include outputProtocol, video, crop - only identification and scene
       const avatarConfig = isCustomAvatar
         ? {
             type: "photo-avatar",
@@ -1052,10 +1615,12 @@ const ChatInterface = () => {
             },
           };
 
-      // Use type assertion since scene update is a newer feature not yet in rt-client types
-      await clientRef.current.configure({
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        avatar: avatarConfig as any,
+      // Use sendRawEvent to bypass SDK serialization which strips 'scene' property
+      await sendRawEvent({
+        type: "session.update",
+        session: {
+          avatar: avatarConfig,
+        },
       });
     } catch (error) {
       console.error("Error updating avatar scene:", error);
@@ -1063,9 +1628,25 @@ const ChatInterface = () => {
   }, [isConnected, isAvatar, isPhotoAvatar, isCustomAvatar, customAvatarName, photoAvatarName, sceneZoom, scenePositionX, scenePositionY, sceneRotationX, sceneRotationY, sceneRotationZ, sceneAmplitude]);
 
   const disconnect = async () => {
+    // Unsubscribe from events first
+    if (subscriptionRef.current) {
+      await subscriptionRef.current.close();
+      subscriptionRef.current = null;
+    }
+    
+    // Disconnect the session
+    if (sessionRef.current) {
+      try {
+        await sessionRef.current.disconnect();
+        sessionRef.current = null;
+      } catch (error) {
+        console.error("Error disconnecting session:", error);
+      }
+    }
+    
+    // Clear the client reference (VoiceLiveClient doesn't need explicit dispose)
     if (clientRef.current) {
       try {
-        await clientRef.current.close();
         clientRef.current = null;
         peerConnection = null as unknown as RTCPeerConnection;
         setIsConnected(false);
@@ -1082,6 +1663,9 @@ const ChatInterface = () => {
         pauseDurations.current = [];
         lastPauseTimestamp.current = null;
 
+        // Clean up WebSocket video resources
+        cleanupWebSocketVideo();
+
         // Stop recording and check if there's any recorded audio
         if (audioHandlerRef.current) {
           audioHandlerRef.current.stopSessionRecording();
@@ -1093,189 +1677,64 @@ const ChatInterface = () => {
     }
   };
 
-  const handleResponse = async (response: RTResponse) => {
-    for await (const item of response) {
-      if (item.type === "message" && item.role === "assistant") {
-        const message: Message = {
-          type: item.role,
-          content: "",
-        };
-        setMessages((prevMessages) => [...prevMessages, message]);
-        for await (const content of item) {
-          if (content.type === "text") {
-            for await (const text of content.textChunks()) {
-              message.content += text;
-              setMessages((prevMessages) => {
-                if (prevMessages[prevMessages.length - 1]?.content) {
-                  prevMessages[prevMessages.length - 1].content =
-                    message.content;
-                }
-                return [...prevMessages];
-              });
-            }
-          } else if (content.type === "audio") {
-            const textTask = async () => {
-              for await (const text of content.transcriptChunks()) {
-                message.content += text;
-                setMessages((prevMessages) => {
-                  if (prevMessages[prevMessages.length - 1]?.content) {
-                    prevMessages[prevMessages.length - 1].content =
-                      message.content;
-                  }
-                  return [...prevMessages];
-                });
-              }
-            };
-            const audioTask = async () => {
-              // Wait for any currently playing audio to finish before starting new playback
-              // await audioHandlerRef.current?.waitForPlaybackComplete();
-              if (audioHandlerRef.current?.isPlaying === false) {
-                  audioHandlerRef.current?.startStreamingPlayback();
-              }
-              for await (const audio of content.audioChunks()) {
-                audioHandlerRef.current?.playChunk(audio, async () => {
-                  proactiveManagerRef.current?.updateActivity("agent speaking");
-                });
-              }
-            };
-            await Promise.all([textTask(), audioTask()]);
-          }
-        }
-        referenceText.current = "";
-        audioChunksForPA.current = [];
-      } else if (isFunctionCallItem(item)) {
-        await item.waitForCompletion();
-        console.log("Function call output:", item);
-        if (item.functionName === "get_time") {
-          const formattedTime = new Date().toLocaleString("en-US", {
-            weekday: "long",
-            year: "numeric",
-            month: "long",
-            day: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
-            timeZoneName: "short",
-          });
-          console.log("Current time:", formattedTime);
-          await clientRef.current?.sendItem({
-            type: "function_call_output",
-            output: formattedTime,
-            call_id: item.callId,
-          });
-          await clientRef.current?.generateResponse();
-        } else if (item.functionName === "search") {
-          const query = JSON.parse(item.arguments).query;
-          console.log("Search query:", query);
-          if (searchClientRef.current) {
-            setMessages((prevMessages) => [
-              ...prevMessages,
-              {
-                type: "status",
-                content: `Searching [${query}]...`,
-              },
-            ]);
-            const searchResults = await searchClientRef.current.search(query, {
-              top: 5,
-              queryType: "semantic",
-              semanticSearchOptions: {
-                configurationName: "default", // this is hardcoded for now.
-              },
-              select: [searchContentField, searchIdentifierField],
-            });
-            let resultText = "";
-            for await (const result of searchResults.results) {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              const document = result.document as any;
-              resultText += `[${document[searchIdentifierField]}]: ${document[searchContentField]}\n-----\n`;
-            }
-            console.log("Search results:", resultText);
-            await clientRef.current?.sendItem({
-              type: "function_call_output",
-              output: resultText,
-              call_id: item.callId,
-            });
-            await clientRef.current?.generateResponse();
-          }
-        } else if (item.functionName === "pronunciation_assessment") {
-          const PAResult = await startPAWithStream();
-          console.log("Pronunciation assessment result:", PAResult);
-          await clientRef.current?.sendItem({
-            type: "function_call_output",
-            output: PAResult,
-            call_id: item.callId,
-          });
-          await clientRef.current?.generateResponse();
-          referenceText.current = "";
-          audioChunksForPA.current = [];
-        }
-      } else if (isMCPCallItem(item)) {
-        // Run MCP call processing in background to avoid blocking UI
-        (async () => {
-          await item.waitForCompletion();
-          console.log("MCP call output:", item);
-          await clientRef.current?.generateResponse();
-        })(); 
-      }
+  // Extract valid audio chunks from a time range (kept for potential PA usage)
+  function extractValidAudioFromTimeRange(startMillis: number, endMillis: number) {
+    audioChunksForPA.current = audioChunksForPA.current.filter(
+      (c) =>
+        c.timestamp >= startMillis &&
+        c.timestamp <= endMillis,
+    );
+  }
+
+  // Handle MCP approval response (approve or deny)
+  const handleMcpApprovalResponse = async (messageId: string, approve: boolean) => {
+    // Find the message to get the approval request ID
+    const message = messages.find((m) => m.id === messageId);
+    if (!message?.mcpApproval || !sessionRef.current) {
+      console.error("Could not find MCP approval request or session");
+      return;
     }
-    if (response.status === "failed") {
-      setMessages((prevMessages) => [
-        ...prevMessages,
+
+    try {
+      // Send the approval response
+      await sessionRef.current.addConversationItem({
+        type: "mcp_approval_response",
+        approve: approve,
+        approvalRequestId: message.mcpApproval.approvalRequestId,
+       
+      } as any);
+
+      // Mark the message as handled
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId
+            ? { ...m, mcpApproval: { ...m.mcpApproval!, handled: true } }
+            : m
+        )
+      );
+
+      // Add a status message indicating the response
+      const toolName = message.mcpApproval.name;
+      setMessages((prev) => [
+        ...prev,
         {
-          type: "error",
-          content: "Response failed:" + JSON.stringify(response.statusDetails),
+          type: "status",
+          content: `MCP tool "${toolName}" ${approve ? "approved" : "denied"}`,
         },
+      ]);
+
+      console.log(`MCP approval response sent: ${approve ? "approved" : "denied"} for ${toolName}`);
+    } catch (error) {
+      console.error("Failed to send MCP approval response:", error);
+      setMessages((prev) => [
+        ...prev,
+        { type: "error", content: `Failed to send approval response: ${error}` },
       ]);
     }
   };
 
-  const handleInputAudio = async (item: RTInputAudioItem) => {
-    isUserSpeaking.current = true;
-    audioHandlerRef.current?.stopStreamingPlayback();
-    await item.waitForCompletion();
-    isUserSpeaking.current = false;
-    setMessages((prevMessages) => [
-      ...prevMessages,
-      {
-        type: "user",
-        content: item.transcription || "",
-      },
-    ]);
-    referenceText.current = item.transcription || "";
-    extractValidAudioFromItem(item);
-  };
-
-  function extractValidAudioFromItem(audioItem: RTInputAudioItem) {
-    if (!audioItem.audioStartMillis || !audioItem.audioEndMillis) return null;
-
-    audioChunksForPA.current = audioChunksForPA.current.filter(
-      (c) =>
-        c.timestamp >= audioItem.audioStartMillis! &&
-        c.timestamp <= audioItem.audioEndMillis!,
-    );
-  }
-
-  const startResponseListener = async () => {
-    if (!clientRef.current) return;
-
-    try {
-      for await (const serverEvent of clientRef.current.events()) {
-        if (serverEvent.type === "response") {
-          await handleResponse(serverEvent);
-        } else if (serverEvent.type === "input_audio") {
-          proactiveManagerRef.current?.updateActivity("user start to speak"); // user started to speak
-          await handleInputAudio(serverEvent);
-        }
-      }
-    } catch (error) {
-      if (clientRef.current) {
-        console.error("Response iteration error:", error);
-      }
-    }
-  };
-
   const sendMessage = async () => {
-    if (currentMessage.trim() && clientRef.current) {
+    if (currentMessage.trim() && sessionRef.current) {
       try {
         const temporaryStorageMessage = currentMessage;
         setCurrentMessage("");
@@ -1288,12 +1747,13 @@ const ChatInterface = () => {
         ]);
         referenceText.current = temporaryStorageMessage;
 
-        await clientRef.current.sendItem({
+         
+        await sessionRef.current.addConversationItem({
           type: "message",
           role: "user",
           content: [{ type: "input_text", text: temporaryStorageMessage }],
-        });
-        await clientRef.current.generateResponse();
+        } as any);
+        await sessionRef.current.sendEvent({ type: "response.create" });
       } catch (error) {
         console.error("Failed to send message:", error);
       }
@@ -1301,7 +1761,7 @@ const ChatInterface = () => {
   };
 
   const startPAWithStream = async (): Promise<string> => {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+     
     return new Promise((resolve, _) => {
       if (!audioChunksForPA.current || audioChunksForPA.current.length === 0) {
         console.log("No audio chunks available for pronunciation assessment.");
@@ -1318,7 +1778,7 @@ const ChatInterface = () => {
       const audioConfig = speechSDK.AudioConfig.fromStreamInput(pushStream);
       const speechConfig = speechSDK.SpeechConfig.fromEndpoint(
         new URL(endpoint),
-        clientAuth.current
+        apiKey  // Use the apiKey directly for speech SDK
       );
 
       speechConfig.setProperty(
@@ -1370,7 +1830,7 @@ const ChatInterface = () => {
         );
       };
 
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+       
       reco.sessionStopped = function (_s, _e) {
         reco.stopContinuousRecognitionAsync();
         reco.close();
@@ -1409,7 +1869,7 @@ const ChatInterface = () => {
   }
 
   const toggleRecording = async () => {
-    if (!isRecording && clientRef.current) {
+    if (!isRecording && sessionRef.current) {
       try {
         if (!startRecordingTimestamp.current) {
           startRecordingTimestamp.current = Date.now();
@@ -1423,7 +1883,7 @@ const ChatInterface = () => {
         }
         await audioHandlerRef.current.startRecording(async (chunk) => {
           cacheAudioChunksForPA(chunk);
-          await clientRef.current?.sendAudio(chunk);
+          await sessionRef.current?.sendAudio(chunk);
           if (isUserSpeaking.current) {
             proactiveManagerRef.current?.updateActivity("user speaking");
           }
@@ -1438,10 +1898,10 @@ const ChatInterface = () => {
         audioHandlerRef.current.stopRecordAnimation();
         lastPauseTimestamp.current = Date.now();
         if (turnDetectionType === null) {
-          const inputAudio = await clientRef.current?.commitAudio();
+          // Commit audio buffer and request response for manual turn detection
+          await sessionRef.current?.sendEvent({ type: "input_audio_buffer.commit" });
           proactiveManagerRef.current?.updateActivity("user speaking");
-          await handleInputAudio(inputAudio!);
-          await clientRef.current?.generateResponse();
+          await sessionRef.current?.sendEvent({ type: "response.create" });
         }
         setIsRecording(false);
       } catch (error) {
@@ -1479,14 +1939,43 @@ const ChatInterface = () => {
 
       // sleep 2 seconds to wait for ICE candidates to be gathered
       await new Promise((resolve) => setTimeout(resolve, 2000));
-      console.log(clientRef.current);
+      console.log("Local SDP offer created:", peerConnection.localDescription);
 
-      const remoteDescription = await clientRef.current?.connectAvatar(
-        peerConnection.localDescription as RTCSessionDescription
-      );
-      await peerConnection.setRemoteDescription(
-        remoteDescription as RTCSessionDescriptionInit
-      );
+      // In the new SDK, avatar connection is done via session.avatar.connect event
+      // Send the SDP offer and wait for the server's SDP answer via the onSessionAvatarConnecting handler
+      if (sessionRef.current && peerConnection.localDescription) {
+        // We need to set up a one-time handler for the avatar connecting event
+        const avatarConnectPromise = new Promise<string>((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            reject(new Error("Avatar connection timeout"));
+          }, 30000);
+
+          // Store the original onServerEvent if it exists
+          const tempSubscription = sessionRef.current!.subscribe({
+            onSessionAvatarConnecting: async (event) => {
+              clearTimeout(timeout);
+              if (event.serverSdp) {
+                resolve(event.serverSdp);
+              } else {
+                reject(new Error("No server SDP received"));
+              }
+              await tempSubscription.close();
+            },
+          });
+        });
+
+        // Send the avatar connect event
+        await sessionRef.current.sendEvent({
+          type: "session.avatar.connect",
+          clientSdp: btoa(JSON.stringify(peerConnection.localDescription)),
+        });
+
+        // Wait for the server's SDP answer (base64 encoded JSON)
+        const serverSdpBase64 = await avatarConnectPromise;
+        const serverSdpJson = atob(serverSdpBase64);
+        const serverSdpObj = JSON.parse(serverSdpJson) as RTCSessionDescriptionInit;
+        await peerConnection.setRemoteDescription(serverSdpObj);
+      }
     } catch (error) {
       console.error("Connection failed:", error);
       setMessages((prevMessages) => [
@@ -1563,6 +2052,149 @@ const ChatInterface = () => {
     // Clean up existing video element if there is any
     if (videoElement?.innerHTML) {
       videoElement.innerHTML = "";
+    }
+
+    // Clean up WebSocket video resources
+    cleanupWebSocketVideo();
+  };
+
+  const cleanupWebSocketVideo = () => {
+    // Clear the queue first to prevent any pending operations
+    videoChunksQueueRef.current = [];
+
+    if (sourceBufferRef.current && mediaSourceRef.current) {
+      try {
+        // Only end the stream if it's still open
+        if (mediaSourceRef.current.readyState === "open") {
+          // Wait for any pending updates to complete before ending
+          if (!sourceBufferRef.current.updating) {
+            mediaSourceRef.current.endOfStream();
+          }
+        }
+      } catch (e) {
+        console.error("Error ending MediaSource stream:", e);
+      }
+    }
+    sourceBufferRef.current = null;
+    mediaSourceRef.current = null;
+  };
+
+  const setupWebSocketVideoPlayback = () => {
+    // Clear any existing video
+    clearVideo();
+
+    // Create video element for WebSocket mode
+    const videoElement = document.createElement("video");
+    videoElement.id = "ws-video";
+    videoElement.autoplay = true;
+    videoElement.playsInline = true;
+
+    // Use responsive dimensions so the video resizes with the browser window,
+    // matching the WebRTC behaviour for both photo and non-photo avatars.
+    if (isPhotoAvatar) {
+      videoElement.style.borderRadius = "10%";
+    }
+    videoElement.style.width = "auto";
+    videoElement.style.height = isDevelop ? "auto" : "";
+    videoElement.style.objectFit = "cover";
+    videoElement.style.display = "block";
+
+    // Add canplay event to start playback
+    videoElement.addEventListener("canplay", () => {
+      videoElement.play().catch(e => console.error("Play error:", e));
+    });
+
+    // fMP4 codec string with video (H.264) and audio (AAC) - matches avatar service output
+    const FMP4_MIME_CODEC = 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"';
+
+    // Set up MediaSource
+    if (!MediaSource.isTypeSupported(FMP4_MIME_CODEC)) {
+      console.error("MediaSource fMP4 codec not supported");
+      setMessages((prevMessages) => [
+        ...prevMessages,
+        {
+          type: "error",
+          content: "WebSocket video playback not supported in this browser. Please use WebRTC mode.",
+        },
+      ]);
+      return;
+    }
+
+    const mediaSource = new MediaSource();
+    mediaSourceRef.current = mediaSource;
+    videoElement.src = URL.createObjectURL(mediaSource);
+
+    mediaSource.addEventListener("sourceopen", () => {
+      try {
+        if (mediaSource.readyState === "open") {
+          const sourceBuffer = mediaSource.addSourceBuffer(FMP4_MIME_CODEC);
+          sourceBufferRef.current = sourceBuffer;
+
+          sourceBuffer.addEventListener("updateend", () => {
+            processVideoChunkQueue();
+          });
+        }
+      } catch (e) {
+        console.error("Error creating SourceBuffer:", e);
+      }
+    });
+
+    // Store video element to be appended when DOM is ready
+    pendingVideoElementRef.current = videoElement;
+
+    // Try to append now if DOM is ready, otherwise useEffect will handle it
+    if (videoRef.current) {
+      videoRef.current.appendChild(videoElement);
+      pendingVideoElementRef.current = null;
+    }
+  };
+
+  // Effect to append pending video element when DOM becomes available
+  useEffect(() => {
+    if (isConnected && videoRef.current && pendingVideoElementRef.current) {
+      videoRef.current.appendChild(pendingVideoElementRef.current);
+      pendingVideoElementRef.current = null;
+    }
+  }, [isConnected]);
+
+  const processVideoChunkQueue = () => {
+    const sourceBuffer = sourceBufferRef.current;
+    const mediaSource = mediaSourceRef.current;
+
+    if (!sourceBuffer ||
+        sourceBuffer.updating ||
+        !mediaSource ||
+        mediaSource.readyState !== "open") {
+      return;
+    }
+
+    const next = videoChunksQueueRef.current.shift();
+    if (!next) {
+      return;
+    }
+
+    try {
+      sourceBuffer.appendBuffer(next);
+    } catch (e) {
+      console.error("Error appending video chunk:", e);
+    }
+  };
+
+  const handleVideoChunk = (base64Data: string) => {
+    try {
+      // Decode base64 to binary
+      const binaryString = atob(base64Data);
+      const arrayBuffer = new ArrayBuffer(binaryString.length);
+      const bytes = new Uint8Array(arrayBuffer);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+
+      // Add ArrayBuffer to queue and process
+      videoChunksQueueRef.current.push(arrayBuffer);
+      processVideoChunkQueue();
+    } catch (e) {
+      console.error("Error handling video chunk:", e);
     }
   };
 
@@ -1996,8 +2628,30 @@ const ChatInterface = () => {
                   </div>
                 )}
 
-                {/* Recognition Language selection - only show if cascaded/agent */}
+                {/* Speech Recognition Model selection - only show if cascaded/agent */}
                 {isCascaded(mode, model) && (
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">
+                      Speech Recognition Model
+                    </label>
+                    <Select
+                      value={srModel}
+                      onValueChange={(value) => setSrModel(value as "azure-speech" | "mai-ears-1")}
+                      disabled={isConnected}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="azure-speech">Azure Speech</SelectItem>
+                        <SelectItem value="mai-ears-1">MAI Ears 1</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+
+                {/* Recognition Language selection - only show if cascaded/agent and not mai-ears-1 */}
+                {isCascaded(mode, model) && srModel !== "mai-ears-1" && (
                   <div className="space-y-2">
                     <label className="text-sm font-medium">
                       Recognition Language
@@ -2205,16 +2859,14 @@ const ChatInterface = () => {
                     />
                   </div>
                 )}
-                {mode === "model" && (
-                  <div className="flex items-center justify-between text-sm font-medium">
-                    <span>Enable proactive responses</span>
-                    <Switch
-                      checked={enableProactive}
-                      onCheckedChange={setEnableProactive}
-                      disabled={isConnected || enablePA}
-                    />
-                  </div>
-                )}
+                <div className="flex items-center justify-between text-sm font-medium">
+                  <span>Enable proactive responses</span>
+                  <Switch
+                    checked={enableProactive}
+                    onCheckedChange={setEnableProactive}
+                    disabled={isConnected || enablePA}
+                  />
+                </div>
                 {/* Tools - only show in model mode */}
                 {mode === "model" && (
                   <div className="space-y-2">
@@ -2687,19 +3339,22 @@ const ChatInterface = () => {
                     </div>
                   </div>
                 )}
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">
-                    Temperature ({temperature})
-                  </label>
-                  <Slider
-                    value={[temperature]}
-                    onValueChange={([value]) => setTemperature(value)}
-                    min={isCascaded(mode, model) ? 0 : 0.6}
-                    max={isCascaded(mode, model) ? 1.0 : 1.2}
-                    step={0.1}
-                    disabled={isConnected}
-                  />
-                </div>
+                {/* Temperature is not configurable in agent-v2 mode */}
+                {mode !== "agent-v2" && (
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">
+                      Temperature ({temperature})
+                    </label>
+                    <Slider
+                      value={[temperature]}
+                      onValueChange={([value]) => setTemperature(value)}
+                      min={isCascaded(mode, model) ? 0 : 0.6}
+                      max={isCascaded(mode, model) ? 1.0 : 1.2}
+                      step={0.1}
+                      disabled={isConnected}
+                    />
+                  </div>
+                )}
 
                 {/* Voice Configuration Section */}
                 <div className="p-4 border-2 border-gray-200 rounded-lg bg-gray-50/50 space-y-4">
@@ -2857,15 +3512,36 @@ const ChatInterface = () => {
                         </span>
                         <Switch
                           checked={isPhotoAvatar}
-                          onCheckedChange={(checked: boolean) =>
-                            setIsPhotoAvatar(checked)
-                          }
+                          onCheckedChange={(checked: boolean) => {
+                            setIsPhotoAvatar(checked);
+                          }}
                           disabled={isConnected}
                         />
                       </div>
                     )}
                   </div>
                 </div>
+                {isAvatar && (
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Avatar Output Mode</label>
+                    <Select
+                      value={avatarOutputMode}
+                      onValueChange={(value: string) => setAvatarOutputMode(value as "webrtc" | "websocket")}
+                      disabled={isConnected}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="webrtc">WebRTC</SelectItem>
+                        <SelectItem value="websocket">WebSocket</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-gray-500">
+                      WebRTC provides real-time streaming. WebSocket mode streams video data over the WebSocket connection.
+                    </p>
+                  </div>
+                )}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     {isAvatar && (
@@ -3174,7 +3850,54 @@ const ChatInterface = () => {
                       key={index}
                       className={`mb-4 p-3 rounded-lg ${getMessageClassNames(message.type)}`}
                     >
-                      {message.content}
+                      {message.type === "mcp_approval" && message.mcpApproval ? (
+                        <div className="flex flex-col gap-2">
+                          <div className="font-semibold text-purple-700">{message.content}</div>
+                          <div className="text-sm">
+                            <div><strong>Server:</strong> {message.mcpApproval.serverLabel}</div>
+                            <div><strong>Tool:</strong> {message.mcpApproval.name}</div>
+                            <div><strong>Arguments:</strong> <code className="bg-gray-200 px-1 rounded text-xs">{message.mcpApproval.arguments}</code></div>
+                          </div>
+                          {!message.mcpApproval.handled ? (
+                            <div className="flex gap-2 mt-2">
+                              <Button
+                                size="sm"
+                                className="bg-green-500 hover:bg-green-600 text-white"
+                                onClick={() => handleMcpApprovalResponse(message.id!, true)}
+                              >
+                                Approve
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="border-red-500 text-red-500 hover:bg-red-50"
+                                onClick={() => handleMcpApprovalResponse(message.id!, false)}
+                              >
+                                Deny
+                              </Button>
+                            </div>
+                          ) : (
+                            <div className="text-sm text-gray-500 italic mt-1">Response sent</div>
+                          )}
+                        </div>
+                      ) : message.type === "foundry_agent" && message.foundryAgent ? (
+                        <div className="flex flex-col gap-2">
+                          <div className="font-semibold text-blue-700">{message.content}</div>
+                          <div className="text-sm">
+                            {message.foundryAgent.arguments && (
+                              <div><strong>Arguments:</strong> <code className="bg-gray-200 px-1 rounded text-xs">{message.foundryAgent.arguments}</code></div>
+                            )}
+                            {message.foundryAgent.agentResponseId && (
+                              <div><strong>Agent Response ID:</strong> <code className="bg-gray-200 px-1 rounded text-xs">{message.foundryAgent.agentResponseId}</code></div>
+                            )}
+                            {message.foundryAgent.output && (
+                              <div><strong>Output:</strong> <code className="bg-gray-200 px-1 rounded text-xs whitespace-pre-wrap">{message.foundryAgent.output}</code></div>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        message.content
+                      )}
                     </div>
                   ))}
                 </div>
