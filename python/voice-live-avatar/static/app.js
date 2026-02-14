@@ -23,6 +23,14 @@ let avatarVideoElement = null;
 let isSpeaking = false;
 let avatarOutputMode = 'webrtc';
 
+// Volume animation state
+let analyserNode = null;
+let analyserDataArray = null;
+let micAnalyserNode = null;
+let micAnalyserDataArray = null;
+let recordAnimationFrameId = null;
+let playChunkAnimationFrameId = null;
+
 // WebSocket video playback (MediaSource Extensions)
 let mediaSource = null;
 let sourceBuffer = null;
@@ -96,6 +104,20 @@ function setupUIBindings() {
     sceneSliders.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.addEventListener('input', throttledUpdateAvatarScene);
+    });
+
+    // Accordion behavior: only one settings group open at a time
+    const settingsGroups = document.querySelectorAll('.sidebar .settings-group');
+    settingsGroups.forEach(group => {
+        group.addEventListener('toggle', () => {
+            if (group.open) {
+                settingsGroups.forEach(other => {
+                    if (other !== group && other.open) {
+                        other.removeAttribute('open');
+                    }
+                });
+            }
+        });
     });
 }
 
@@ -250,6 +272,7 @@ function addMessage(role, text, isDev = false) {
 
     messagesEl.appendChild(msgDiv);
     scrollChatToBottom();
+    updateClearChatButton();
     return contentDiv;
 }
 
@@ -267,7 +290,19 @@ function scrollChatToBottom() {
 }
 
 function clearChat() {
-    document.getElementById('messages').innerHTML = '';
+    const messages = document.getElementById('messages');
+    if (messages.children.length === 0) return;
+    messages.innerHTML = '';
+    updateClearChatButton();
+}
+
+function updateClearChatButton() {
+    const btn = document.getElementById('clearChatBtn');
+    const messages = document.getElementById('messages');
+    if (!btn || !messages) return;
+    const hasMessages = messages.children.length > 0;
+    btn.disabled = !hasMessages;
+    btn.style.opacity = hasMessages ? '' : '0.5';
 }
 
 // ===== Gather Config =====
@@ -510,11 +545,11 @@ function handleServerMessage(msg) {
             pendingAssistantText = '';
             addMessage('assistant', '');
             isSpeaking = true;
-            updateVolumeAnimation();
             break;
         case 'response_done':
             isSpeaking = false;
-            updateVolumeAnimation();
+            // Don't stop play-chunk animation here - the animation loop
+            // will self-terminate when all buffered audio finishes playing
             break;
         case 'session_closed':
             addMessage('system', 'Session closed');
@@ -548,7 +583,7 @@ function onAssistantDelta(text) {
     }
 }
 
-function onSessionStarted(msg) {
+async function onSessionStarted(msg) {
     isConnected = true;
     isConnecting = false;
     updateConnectionUI();
@@ -582,8 +617,10 @@ function onSessionStarted(msg) {
     document.getElementById('recordContainer').style.display = '';
 
     // Start audio capture but leave mic off by default
-    startAudioCapture();
+    await startAudioCapture();
     isRecording = false;
+    stopRecordAnimation();
+    resetVolumeCircle();
     updateMicUI();
 }
 
@@ -695,8 +732,8 @@ function updateDeveloperModeLayout() {
             chatArea.style.display = '';
             volumeAnimation.style.display = 'none';
         } else if (isConnected) {
-            // No avatar + developer: show chat + volume
-            contentArea.classList.remove('developer-layout');
+            // No avatar + developer: side-by-side layout (robot + chat)
+            contentArea.classList.add('developer-layout');
             avatarVideoContainer.style.display = 'none';
             chatArea.style.display = '';
             volumeAnimation.style.display = '';
@@ -719,12 +756,12 @@ function updateDeveloperModeLayout() {
             chatArea.style.display = 'none';
             volumeAnimation.style.display = 'none';
         } else if (isConnected) {
-            // No avatar + normal: chat + volume
+            // No avatar + normal: only robot, no chat
             avatarVideoContainer.style.display = 'none';
-            chatArea.style.display = '';
+            chatArea.style.display = 'none';
             volumeAnimation.style.display = '';
         } else {
-            // Not connected: show chat
+            // Not connected: show chat history
             avatarVideoContainer.style.display = 'none';
             chatArea.style.display = '';
             volumeAnimation.style.display = 'none';
@@ -862,6 +899,12 @@ registerProcessor('pcm16-processor', PCM16Processor);
         const source = audioContext.createMediaStreamSource(mediaStream);
         workletNode = new AudioWorkletNode(audioContext, 'pcm16-processor');
 
+        // Create analyser for mic volume visualization
+        const micAnalyser = audioContext.createAnalyser();
+        micAnalyser.fftSize = 2048;
+        micAnalyser.smoothingTimeConstant = 0.85;
+        const micDataArray = new Uint8Array(micAnalyser.frequencyBinCount);
+
         workletNode.port.onmessage = (e) => {
             if (!isConnected || !isRecording || !ws || ws.readyState !== WebSocket.OPEN) return;
             const base64 = arrayBufferToBase64(e.data);
@@ -873,7 +916,15 @@ registerProcessor('pcm16-processor', PCM16Processor);
         };
 
         source.connect(workletNode);
+        source.connect(micAnalyser);
         workletNode.connect(audioContext.destination);
+
+        // Store mic analyser so volume animation can use it
+        micAnalyserNode = micAnalyser;
+        micAnalyserDataArray = micDataArray;
+        analyserNode = micAnalyser;
+        analyserDataArray = micDataArray;
+        startVolumeAnimation('record');
 
         console.log('[Audio] Capture started (24kHz PCM16)');
     } catch (err) {
@@ -883,9 +934,13 @@ registerProcessor('pcm16-processor', PCM16Processor);
 }
 
 function stopAudioCapture() {
+    stopRecordAnimation();
+    micAnalyserNode = null;
+    micAnalyserDataArray = null;
     if (workletNode) { try { workletNode.disconnect(); } catch (e) {} workletNode = null; }
     if (audioContext) { try { audioContext.close(); } catch (e) {} audioContext = null; }
     if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+    resetVolumeCircle();
 }
 
 // ===== Audio Playback (24kHz PCM16) =====
@@ -893,6 +948,12 @@ function handleAudioDelta(base64Data) {
     if (!base64Data) return;
     if (!playbackContext) {
         playbackContext = new AudioContext({ sampleRate: 24000 });
+        // Create analyser for volume visualization
+        analyserNode = playbackContext.createAnalyser();
+        analyserNode.fftSize = 2048;
+        analyserNode.smoothingTimeConstant = 0.85;
+        analyserDataArray = new Uint8Array(analyserNode.frequencyBinCount);
+        analyserNode.connect(playbackContext.destination);
         nextPlaybackTime = 0;
     }
     const arrayBuffer = base64ToArrayBuffer(base64Data);
@@ -905,18 +966,117 @@ function handleAudioDelta(base64Data) {
     buffer.getChannelData(0).set(float32);
     const source = playbackContext.createBufferSource();
     source.buffer = buffer;
-    source.connect(playbackContext.destination);
+    source.connect(analyserNode);
 
     const now = playbackContext.currentTime;
     if (nextPlaybackTime < now) nextPlaybackTime = now;
     source.start(nextPlaybackTime);
     nextPlaybackTime += buffer.duration;
+
+    // Start playback volume animation (only if not already running)
+    if (!playChunkAnimationFrameId) {
+        startVolumeAnimation('play-chunk');
+    }
 }
 
 function stopAudioPlayback() {
+    stopPlayChunkAnimation();
     if (playbackContext) { try { playbackContext.close(); } catch (e) {} playbackContext = null; }
     playbackBufferQueue = [];
     nextPlaybackTime = 0;
+    // Switch back to mic analyser if mic is on
+    if (isRecording && micAnalyserNode) {
+        analyserNode = micAnalyserNode;
+        analyserDataArray = micAnalyserDataArray;
+        startVolumeAnimation('record');
+    } else {
+        analyserNode = null;
+        analyserDataArray = null;
+        resetVolumeCircle();
+    }
+}
+
+// ===== Volume Animation =====
+function startVolumeAnimation(animationType) {
+    if (animationType === 'record') {
+        stopPlayChunkAnimation();
+    } else {
+        stopPlayChunkAnimation();
+        stopRecordAnimation();
+    }
+    const isRecord = animationType === 'record';
+    const calculateVolume = () => {
+        if (analyserNode && analyserDataArray) {
+            analyserNode.getByteFrequencyData(analyserDataArray);
+            const volume = Array.from(analyserDataArray).reduce((acc, v) => acc + v, 0) / analyserDataArray.length;
+            updateVolumeCircle(volume, animationType);
+        }
+
+        if (isRecord) {
+            // Stop record animation if mic was turned off
+            if (!isRecording) {
+                recordAnimationFrameId = null;
+                resetVolumeCircle();
+                return;
+            }
+            recordAnimationFrameId = requestAnimationFrame(calculateVolume);
+        } else {
+            // For playback: self-terminate when response is done AND audio finished
+            if (!isSpeaking && (!playbackContext || playbackContext.currentTime >= nextPlaybackTime + 0.3)) {
+                playChunkAnimationFrameId = null;
+                // Switch back to mic animation or reset
+                if (isRecording && micAnalyserNode) {
+                    analyserNode = micAnalyserNode;
+                    analyserDataArray = micAnalyserDataArray;
+                    startVolumeAnimation('record');
+                } else {
+                    analyserNode = null;
+                    analyserDataArray = null;
+                    resetVolumeCircle();
+                }
+                return;
+            }
+            playChunkAnimationFrameId = requestAnimationFrame(calculateVolume);
+        }
+    };
+    calculateVolume();
+}
+
+function stopRecordAnimation() {
+    if (recordAnimationFrameId) {
+        cancelAnimationFrame(recordAnimationFrameId);
+        recordAnimationFrameId = null;
+    }
+}
+
+function stopPlayChunkAnimation() {
+    if (playChunkAnimationFrameId) {
+        cancelAnimationFrame(playChunkAnimationFrameId);
+        playChunkAnimationFrameId = null;
+    }
+}
+
+function stopVolumeAnimation() {
+    stopRecordAnimation();
+    stopPlayChunkAnimation();
+}
+
+function updateVolumeCircle(volume, animationType) {
+    const circle = document.getElementById('volumeCircle');
+    if (!circle) return;
+    const minSize = 160;
+    const size = minSize + volume;
+    circle.style.backgroundColor = animationType === 'record' ? 'lightgray' : 'lightblue';
+    circle.style.width = size + 'px';
+    circle.style.height = size + 'px';
+}
+
+function resetVolumeCircle() {
+    const circle = document.getElementById('volumeCircle');
+    if (!circle) return;
+    circle.style.width = '';
+    circle.style.height = '';
+    circle.style.backgroundColor = '';
 }
 
 // ===== WebSocket Video Playback (MediaSource Extensions) =====
@@ -1148,7 +1308,15 @@ function toggleMicrophone() {
     if (!isConnected) return;
     isRecording = !isRecording;
     updateMicUI();
-    // Mic state changed - no chat message needed (matches JS sample)
+    // Start/stop volume animation based on mic state
+    if (isRecording && micAnalyserNode) {
+        analyserNode = micAnalyserNode;
+        analyserDataArray = micAnalyserDataArray;
+        startVolumeAnimation('record');
+    } else if (!isRecording) {
+        stopRecordAnimation();
+        resetVolumeCircle();
+    }
 }
 
 // ===== Send Text =====
@@ -1165,7 +1333,6 @@ function sendTextMessage() {
 // ===== Speech Events (sound wave animation) =====
 function onSpeechStarted(itemId) {
     isSpeaking = true;
-    updateVolumeAnimation();
     // Stop assistant audio playback (barge-in) in speech-only mode
     stopAudioPlayback();
     // Add user placeholder message (will be updated when transcription completes)
@@ -1180,12 +1347,6 @@ function onSpeechStarted(itemId) {
 function onSpeechStopped() {
     pendingAssistantText = '';
     isSpeaking = false;
-    updateVolumeAnimation();
-}
-
-function updateVolumeAnimation() {
-    const circle = document.getElementById('volumeCircle');
-    if (circle) circle.classList.toggle('active', isSpeaking);
 }
 
 // ===== Utilities =====
