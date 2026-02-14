@@ -292,12 +292,11 @@ class VoiceSessionHandler:
         avatar_name = config.get("avatarName", "Lisa-casual-sitting")
         is_photo = config.get("isPhotoAvatar", False)
         is_custom = config.get("isCustomAvatar", False)
-        custom_avatar_name = config.get("customAvatarName", "")
         background_url = config.get("avatarBackgroundImageUrl", "")
 
         # Parse character and style from avatar name
         if is_custom:
-            character = custom_avatar_name
+            character = avatar_name
             style = None
         elif is_photo:
             photo_name = config.get("photoAvatarName", "Anika")
