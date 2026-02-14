@@ -22,6 +22,8 @@ let peerConnection = null;
 let avatarVideoElement = null;
 let isSpeaking = false;
 let avatarOutputMode = 'webrtc';
+let cachedIceServers = null;
+let peerConnectionQueue = [];
 
 // Volume animation state
 let analyserNode = null;
@@ -466,6 +468,11 @@ function handleDisconnect() {
     cleanupWebRTC();
     cleanupWebSocketVideo();
     updateSoundWaveAnimation();
+
+    // Prepare next peer connection for faster reconnection
+    if (cachedIceServers) {
+        preparePeerConnection(cachedIceServers);
+    }
 
     if (ws) {
         try { ws.close(); } catch (e) {}
@@ -1189,9 +1196,126 @@ function cleanupWebSocketVideo() {
 }
 
 // ===== WebRTC for Avatar =====
+
+// Prepare a peer connection ahead of time so ICE candidates are pre-gathered.
+// This avoids the ICE gathering delay when the user starts a new session.
+function preparePeerConnection(iceServers) {
+    const iceConfig = iceServers.map(s => ({
+        urls: s.urls,
+        username: s.username || undefined,
+        credential: s.credential || undefined,
+    }));
+
+    const pc = new RTCPeerConnection({ iceServers: iceConfig });
+    let iceGatheringDone = false;
+
+    // Handle incoming tracks (video and audio)
+    pc.ontrack = (event) => {
+        const container = document.getElementById('avatarVideo');
+        const mediaPlayer = document.createElement(event.track.kind);
+        mediaPlayer.id = event.track.kind;
+        mediaPlayer.srcObject = event.streams[0];
+        mediaPlayer.autoplay = false;
+        mediaPlayer.addEventListener('loadeddata', () => {
+            mediaPlayer.play();
+        });
+        if (container) container.appendChild(mediaPlayer);
+        if (event.track.kind === 'video') {
+            avatarVideoElement = mediaPlayer;
+            mediaPlayer.style.width = '0.1%';
+            mediaPlayer.style.height = '0.1%';
+            mediaPlayer.onplaying = () => {
+                setTimeout(() => {
+                    mediaPlayer.style.width = '';
+                    mediaPlayer.style.height = '';
+                }, 0);
+            };
+        }
+    };
+
+    pc.onicegatheringstatechange = () => {
+        if (pc.iceGatheringState === 'complete') {
+            // ICE gathering complete
+        }
+    };
+
+    pc.onicecandidate = (event) => {
+        if (!event.candidate && !iceGatheringDone) {
+            iceGatheringDone = true;
+            peerConnectionQueue.push(pc);
+            console.log('[' + new Date().toISOString() + '] ICE gathering done, new peer connection prepared.');
+            // Keep only the latest prepared connection
+            if (peerConnectionQueue.length > 1) {
+                const old = peerConnectionQueue.shift();
+                try { old.close(); } catch (e) {}
+            }
+        }
+    };
+
+    // Add transceivers for video and audio
+    pc.addTransceiver('video', { direction: 'sendrecv' });
+    pc.addTransceiver('audio', { direction: 'sendrecv' });
+
+    // Listen for data channel events
+    pc.addEventListener('datachannel', (event) => {
+        const dataChannel = event.channel;
+        dataChannel.onmessage = (e) => {
+            console.log('[' + new Date().toISOString() + '] WebRTC event received: ' + e.data);
+        };
+        dataChannel.onclose = () => {
+            console.log('Data channel closed');
+        };
+    });
+    pc.createDataChannel('eventChannel');
+
+    pc.createOffer().then(offer => {
+        return pc.setLocalDescription(offer);
+    }).then(() => {
+        // Timeout fallback: if ICE gathering hasn't completed after 10 seconds, push anyway
+        setTimeout(() => {
+            if (!iceGatheringDone) {
+                iceGatheringDone = true;
+                peerConnectionQueue.push(pc);
+                console.log('[' + new Date().toISOString() + '] ICE gathering timed out, peer connection prepared with available candidates.');
+                if (peerConnectionQueue.length > 1) {
+                    const old = peerConnectionQueue.shift();
+                    try { old.close(); } catch (e) {}
+                }
+            }
+        }, 10000);
+    }).catch(err => {
+        console.error('preparePeerConnection offer error', err);
+    });
+}
+
 function setupWebRTC(iceServers) {
     if (peerConnection) cleanupWebRTC();
 
+    // Cache ICE servers for future peer connection preparation
+    cachedIceServers = iceServers;
+
+    // Clear existing video container
+    const container = document.getElementById('avatarVideo');
+    if (container) container.innerHTML = '';
+
+    if (peerConnectionQueue.length > 0) {
+        // Use cached peer connection with pre-gathered ICE candidates
+        peerConnection = peerConnectionQueue.shift();
+        console.log('[' + new Date().toISOString() + '] Using cached peer connection with pre-gathered ICE candidates.');
+
+        // Send SDP offer immediately (no need to wait for ICE gathering)
+        const sdpJson = JSON.stringify(peerConnection.localDescription);
+        const sdpBase64 = btoa(sdpJson);
+        console.log('[SDP] Sending cached base64 SDP, starts with:', sdpBase64.substring(0, 40));
+        ws.send(JSON.stringify({ type: 'avatar_sdp_offer', clientSdp: sdpBase64 }));
+        console.log('[WebRTC] Cached SDP offer sent (base64)');
+
+        // Prepare next peer connection for future use
+        preparePeerConnection(iceServers);
+        return;
+    }
+
+    // No cached peer connection available (first connection), create one from scratch
     const iceConfig = iceServers.map(s => ({
         urls: s.urls,
         username: s.username || undefined,
@@ -1200,11 +1324,7 @@ function setupWebRTC(iceServers) {
 
     peerConnection = new RTCPeerConnection({ iceServers: iceConfig });
 
-    // Clear existing video container
-    const container = document.getElementById('avatarVideo');
-    if (container) container.innerHTML = '';
-
-    // Handle incoming tracks (video and audio) — matching JS reference
+    // Handle incoming tracks (video and audio)
     peerConnection.ontrack = (event) => {
         const mediaPlayer = document.createElement(event.track.kind);
         mediaPlayer.id = event.track.kind;
@@ -1233,17 +1353,24 @@ function setupWebRTC(iceServers) {
         }
     };
 
+    let iceGatheringDone = false;
     peerConnection.onicecandidate = (event) => {
-        if (!event.candidate) {
-            // All ICE candidates gathered
+        if (!event.candidate && !iceGatheringDone) {
+            iceGatheringDone = true;
+            // ICE gathering complete, send SDP offer now
+            const sdpJson = JSON.stringify(peerConnection.localDescription);
+            const sdpBase64 = btoa(sdpJson);
+            console.log('[SDP] Sending base64 SDP, starts with:', sdpBase64.substring(0, 40));
+            ws.send(JSON.stringify({ type: 'avatar_sdp_offer', clientSdp: sdpBase64 }));
+            console.log('[WebRTC] SDP offer sent (base64)');
         }
     };
 
-    // Add transceivers for video and audio (matching JS reference)
+    // Add transceivers for video and audio
     peerConnection.addTransceiver('video', { direction: 'sendrecv' });
     peerConnection.addTransceiver('audio', { direction: 'sendrecv' });
 
-    // Listen for data channel events (matching JS reference)
+    // Listen for data channel events
     peerConnection.addEventListener('datachannel', (event) => {
         const dataChannel = event.channel;
         dataChannel.onmessage = (e) => {
@@ -1253,25 +1380,29 @@ function setupWebRTC(iceServers) {
             console.log('Data channel closed');
         };
     });
-    // Create data channel (matching JS reference)
     peerConnection.createDataChannel('eventChannel');
 
     peerConnection.createOffer().then(offer => {
         return peerConnection.setLocalDescription(offer);
     }).then(() => {
-        // Wait 2 seconds for ICE candidates to be gathered (matching JS reference)
-        return new Promise(resolve => setTimeout(resolve, 2000));
-    }).then(() => {
-        // Send base64-encoded JSON of localDescription (matching JS reference: btoa(JSON.stringify(localDescription)))
-        const sdpJson = JSON.stringify(peerConnection.localDescription);
-        const sdpBase64 = btoa(sdpJson);
-        console.log('[SDP] Sending base64 SDP, starts with:', sdpBase64.substring(0, 40));
-        ws.send(JSON.stringify({ type: 'avatar_sdp_offer', clientSdp: sdpBase64 }));
-        console.log('[WebRTC] SDP offer sent (base64)');
+        // Timeout fallback: send SDP after 10 seconds if ICE gathering hasn't completed
+        setTimeout(() => {
+            if (!iceGatheringDone) {
+                iceGatheringDone = true;
+                const sdpJson = JSON.stringify(peerConnection.localDescription);
+                const sdpBase64 = btoa(sdpJson);
+                console.log('[SDP] Sending base64 SDP (timeout), starts with:', sdpBase64.substring(0, 40));
+                ws.send(JSON.stringify({ type: 'avatar_sdp_offer', clientSdp: sdpBase64 }));
+                console.log('[WebRTC] SDP offer sent after timeout (base64)');
+            }
+        }, 10000);
     }).catch(err => {
         console.error('WebRTC offer error', err);
         addMessage('system', 'WebRTC setup failed');
     });
+
+    // Prepare a peer connection for future use
+    preparePeerConnection(iceServers);
 }
 
 function handleAvatarSdpAnswer(serverSdpBase64) {
