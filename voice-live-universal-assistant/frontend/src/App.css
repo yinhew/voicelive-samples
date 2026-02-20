@@ -1,0 +1,146 @@
+/* ─── Theme: Dark (default) ─── */
+[data-theme="dark"] {
+  --bg-1: #292929;
+  --bg-2: #1f1f1f;
+  --bg-3: #141414;
+  --fg-1: #ffffff;
+  --fg-2: #d6d6d6;
+  --fg-3: #adadad;
+  --voice-primary: #9775fa;
+  --voice-secondary: #7950f2;
+  --voice-glow: rgba(151, 117, 250, 0.4);
+  --voice-bg-subtle: rgba(151, 117, 250, 0.15);
+  --brand-blue: #00A8F4;
+  --brand-blue-bg: rgba(0, 168, 244, 0.2);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-subtle: rgba(255, 255, 255, 0.12);
+  --surface: rgba(255, 255, 255, 0.05);
+  --surface-overlay: rgba(255, 255, 255, 0.08);
+  --control-bar-bg: rgba(0, 0, 0, 0.3);
+  --scrollbar-thumb: rgba(255, 255, 255, 0.15);
+  --backdrop: rgba(0, 0, 0, 0.5);
+  --error: #ef4444;
+  --error-bg: rgba(239, 68, 68, 0.9);
+  --error-bg-subtle: rgba(239, 68, 68, 0.15);
+  --warning: #fbbf24;
+}
+
+/* ─── Theme: Light ─── */
+[data-theme="light"] {
+  --bg-1: #f5f5f5;
+  --bg-2: #ffffff;
+  --bg-3: #ebebeb;
+  --fg-1: #242424;
+  --fg-2: #424242;
+  --fg-3: #616161;
+  --voice-primary: #7c5cbf;
+  --voice-secondary: #6741b0;
+  --voice-glow: rgba(124, 92, 191, 0.35);
+  --voice-bg-subtle: rgba(124, 92, 191, 0.1);
+  --brand-blue: #005E8B;
+  --brand-blue-bg: rgba(0, 94, 139, 0.12);
+  --border: rgba(0, 0, 0, 0.08);
+  --border-subtle: rgba(0, 0, 0, 0.15);
+  --surface: rgba(0, 0, 0, 0.03);
+  --surface-overlay: rgba(0, 0, 0, 0.05);
+  --control-bar-bg: rgba(255, 255, 255, 0.85);
+  --scrollbar-thumb: rgba(0, 0, 0, 0.15);
+  --backdrop: rgba(0, 0, 0, 0.3);
+  --error: #dc2626;
+  --error-bg: rgba(220, 38, 38, 0.9);
+  --error-bg-subtle: rgba(220, 38, 38, 0.1);
+  --warning: #d97706;
+}
+
+/* ─── Reset ─── */
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, Roboto, sans-serif;
+  background: var(--bg-1);
+  color: var(--fg-1);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Button reset */
+button {
+  font-family: inherit;
+}
+
+button:hover {
+  filter: brightness(1.08);
+}
+
+button:active {
+  transform: scale(0.97);
+}
+
+/* Input/textarea theming */
+input, textarea, select {
+  font-family: inherit;
+}
+
+input:focus, textarea:focus, select:focus {
+  border-color: var(--brand-blue) !important;
+  box-shadow: 0 0 0 2px var(--brand-blue-bg);
+}
+
+select option {
+  background: var(--bg-2);
+  color: var(--fg-1);
+}
+
+select optgroup {
+  background: var(--bg-3);
+  color: var(--fg-2);
+  font-weight: 600;
+}
+
+/* Checkbox accent color */
+input[type="checkbox"] {
+  accent-color: var(--brand-blue);
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 3px;
+}
+
+/* Badge hover */
+a[aria-label="Built with Azure AI Foundry"]:hover {
+  opacity: 1 !important;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideIn {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translate(-50%, -20px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}

@@ -1,0 +1,31 @@
+name: voicelive-web-sample
+metadata:
+  template: voicelive-web-sample@0.0.1
+
+infra:
+  path: ./infra
+  module: main
+
+# Deployment is handled via hooks (uses ACR cloud build — no local Docker required)
+hooks:
+  # After provision: assign RBAC for Voice Live API access
+  postprovision:
+    windows:
+      shell: pwsh
+      run: ./deployment/hooks/postprovision.ps1
+      continueOnError: false
+    posix:
+      shell: pwsh
+      run: ./deployment/hooks/postprovision.ps1
+      continueOnError: false
+
+  # Deploy: build image via ACR cloud build, update Container App
+  predeploy:
+    windows:
+      shell: pwsh
+      run: ./deployment/hooks/predeploy.ps1
+      continueOnError: false
+    posix:
+      shell: pwsh
+      run: ./deployment/hooks/predeploy.ps1
+      continueOnError: false
