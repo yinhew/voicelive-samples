@@ -156,14 +156,29 @@ voice-live-universal-assistant/
 
 ### Option 1: Basic — Container App only (default)
 
-Deploys the web app with your existing Azure AI Services resource:
+Deploys the web app connecting to your **existing** Azure AI Services resource. You must configure the endpoint before deploying:
 
 ```bash
 azd auth login
+azd init
+
+# Required: set your Voice Live endpoint
+azd env set AZURE_VOICELIVE_ENDPOINT "https://your-resource.cognitiveservices.azure.com/"
+
+# For agent mode (default):
+azd env set VOICELIVE_MODE agent
+azd env set AZURE_VOICELIVE_AGENT_NAME "your-agent-name"
+azd env set AZURE_VOICELIVE_PROJECT "your-project-name"
+
+# For model mode:
+azd env set VOICELIVE_MODE model
+# VOICELIVE_MODEL defaults to gpt-realtime
+
+# Optional: API key (only if token auth is unavailable for your resource)
+azd env set AZURE_VOICELIVE_API_KEY "your-api-key"
+
 azd up
 ```
-
-You'll be prompted for `AZURE_VOICELIVE_ENDPOINT` and optionally `AZURE_VOICELIVE_API_KEY`.
 
 This provisions:
 - **Container Apps Environment** with Log Analytics
@@ -171,48 +186,58 @@ This provisions:
 - **Container App** with system-assigned managed identity
 - **RBAC** — Cognitive Services User for token-based auth
 
-### Option 2: With Foundry — Create AI Foundry account + project
+### Option 2: With Foundry — Create AI Foundry + use model mode
 
-Provisions a new AI Foundry resource alongside the web app:
+Provisions a new AI Foundry resource with `gpt-realtime` model deployment and configures the app for **model mode** — no additional configuration required:
 
 ```bash
+azd auth login
+azd init
 azd env set CREATE_FOUNDRY true
 azd up
 ```
 
-This adds:
+This adds (fully automatic — no manual endpoint/model config needed):
 - **AI Services Account** (kind: AIServices) with system-assigned identity
 - **AI Foundry Project** under the account
-- **Azure AI User** role (for tracing)
-- **Azure AI Developer** role on the Container App identity
-
-The provisioned project endpoint is automatically passed to the Container App.
+- **gpt-4o-realtime-preview** model deployment (as `gpt-realtime`)
+- **Azure AI User** + **Azure AI Developer** roles
+- Container App configured with provisioned endpoint + model mode
 
 ### Option 3: With Agent — Foundry + GPT-4.1-mini + Foundry Agent
 
-Full end-to-end: provisions Foundry, deploys GPT-4.1-mini, and creates an agent with Voice Live configuration:
+Full end-to-end: provisions Foundry, deploys GPT-4.1-mini, and creates an agent with Voice Live configuration — no additional configuration required:
 
 ```bash
-azd env set CREATE_FOUNDRY true
+azd auth login
+azd init
 azd env set CREATE_AGENT true
-azd env set AGENT_NAME "my-voice-assistant"   # optional, defaults to voicelive-assistant
+# Optional: customize agent name (default: voicelive-assistant)
+azd env set AGENT_NAME "my-voice-assistant"
 azd up
 ```
 
-This adds (on top of Option 2):
-- **GPT-4.1-mini model deployment** on the Foundry account
+> **Note:** `CREATE_AGENT` automatically enables `CREATE_FOUNDRY` — you don't need to set both.
+
+This adds (fully automatic):
+- Everything from Option 2
+- **GPT-4.1-mini** model deployment (for the agent)
 - **Foundry Agent** created via Python SDK with Voice Live session config (Azure voice, semantic VAD, noise suppression, echo cancellation)
-- App automatically switches to **agent mode**
+- Container App configured with agent name, project, and **agent mode**
 
 ### Deployment parameters
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `CREATE_FOUNDRY` | `false` | Create AI Foundry account + project |
-| `CREATE_AGENT` | `false` | Deploy model + create agent (requires `CREATE_FOUNDRY=true`) |
+| `AZURE_VOICELIVE_ENDPOINT` | — | Voice Live endpoint (required for basic, auto-set with Foundry) |
+| `VOICELIVE_MODE` | `agent` | Connection mode (auto-set: `model` with Foundry, `agent` with Agent) |
+| `AZURE_VOICELIVE_AGENT_NAME` | — | Agent name (auto-set when `CREATE_AGENT=true`) |
+| `AZURE_VOICELIVE_PROJECT` | — | Foundry project (auto-set when Foundry provisioned) |
+| `CREATE_FOUNDRY` | `false` | Create AI Foundry account + project + model |
+| `CREATE_AGENT` | `false` | Create Foundry Agent (implies `CREATE_FOUNDRY`) |
 | `FOUNDRY_ACCOUNT_NAME` | auto-generated | Custom name for the AI Services account |
 | `FOUNDRY_PROJECT_NAME` | `voicelive-project` | Name for the Foundry project |
-| `AGENT_MODEL_DEPLOYMENT_NAME` | `gpt-4.1-mini` | Model deployment name |
+| `AGENT_MODEL_DEPLOYMENT_NAME` | `gpt-4.1-mini` | Model deployment name for agent |
 | `AGENT_NAME` | `voicelive-assistant` | Name for the created agent |
 
 ## Development

@@ -49,15 +49,18 @@ param foundryAccountName string = ''
 @description('Foundry project name (used when createFoundry=true)')
 param foundryProjectName string = 'voicelive-project'
 
-// --- Optional Agent provisioning ---
+// --- Optional Agent provisioning (implies createFoundry) ---
 @description('Create a Foundry Agent with Voice Live config and deploy GPT-4.1-mini (default: false)')
 param createAgent bool = false
 
 @description('Model deployment name for the agent (used when createAgent=true)')
 param agentModelDeploymentName string = 'gpt-4.1-mini'
 
-@description('Agent name (used when createAgent=true, defaults to voiceLiveAgentName)')
-param agentName string = ''
+@description('Agent name (used when createAgent=true)')
+param agentName string = 'voicelive-assistant'
+
+// createAgent implies createFoundry
+var effectiveCreateFoundry = createFoundry || createAgent
 
 var abbrs = loadJsonContent('./abbreviations.json')
 var resourceToken = toLower(uniqueString(subscription().id, environmentName, location))
@@ -86,16 +89,22 @@ module infrastructure 'main-infrastructure.bicep' = {
 var effectiveFoundryAccountName = !empty(foundryAccountName) ? foundryAccountName : 'ai-${resourceToken}'
 var effectiveFoundryProjectName = foundryProjectName
 
-// Model deployments — only when createAgent is true (agent needs a model)
+// Model deployments: GPT-4.1-mini when createAgent, gpt-realtime for model mode (createFoundry only)
 var modelDeployments = createAgent ? [
   {
     name: agentModelDeploymentName
     model: 'gpt-4.1-mini'
     capacity: 1
   }
+] : effectiveCreateFoundry ? [
+  {
+    name: 'gpt-realtime'
+    model: 'gpt-4o-realtime-preview'
+    capacity: 1
+  }
 ] : []
 
-module foundry './modules/foundry.bicep' = if (createFoundry) {
+module foundry './modules/foundry.bicep' = if (effectiveCreateFoundry) {
   name: 'foundry'
   scope: rg
   params: {
@@ -107,7 +116,7 @@ module foundry './modules/foundry.bicep' = if (createFoundry) {
   }
 }
 
-module foundryRbac './modules/foundry-rbac.bicep' = if (createFoundry) {
+module foundryRbac './modules/foundry-rbac.bicep' = if (effectiveCreateFoundry) {
   name: 'foundry-rbac'
   scope: rg
   params: {
@@ -116,8 +125,13 @@ module foundryRbac './modules/foundry-rbac.bicep' = if (createFoundry) {
   }
 }
 
-// Resolve project endpoint: provisioned or user-provided
-var resolvedProjectEndpoint = createFoundry ? foundry.outputs.projectEndpoint : voiceLiveEndpoint
+// Resolve values from provisioned Foundry or user-provided settings
+var resolvedEndpoint = effectiveCreateFoundry ? foundry.outputs.accountEndpoint : voiceLiveEndpoint
+var resolvedProjectEndpoint = effectiveCreateFoundry ? foundry.outputs.projectEndpoint : voiceLiveEndpoint
+var resolvedMode = createAgent ? 'agent' : (effectiveCreateFoundry ? 'model' : voiceLiveMode)
+var resolvedAgentName = createAgent ? agentName : voiceLiveAgentName
+var resolvedProject = effectiveCreateFoundry ? effectiveFoundryProjectName : voiceLiveProject
+var resolvedModel = effectiveCreateFoundry && !createAgent ? 'gpt-realtime' : voiceLiveModel
 
 module app 'main-app.bicep' = {
   name: 'app'
@@ -128,12 +142,12 @@ module app 'main-app.bicep' = {
     resourceToken: resourceToken
     containerAppsEnvironmentId: infrastructure.outputs.containerAppsEnvironmentId
     containerRegistryName: infrastructure.outputs.containerRegistryName
-    voiceLiveEndpoint: voiceLiveEndpoint
+    voiceLiveEndpoint: resolvedEndpoint
     voiceLiveApiKey: voiceLiveApiKey
-    voiceLiveMode: createAgent ? 'agent' : voiceLiveMode
-    voiceLiveAgentName: voiceLiveAgentName
-    voiceLiveProject: voiceLiveProject
-    voiceLiveModel: voiceLiveModel
+    voiceLiveMode: resolvedMode
+    voiceLiveAgentName: resolvedAgentName
+    voiceLiveProject: resolvedProject
+    voiceLiveModel: resolvedModel
     voiceLiveVoice: voiceLiveVoice
     voiceLiveVoiceType: voiceLiveVoiceType
     voiceLiveTranscribeModel: voiceLiveTranscribeModel
@@ -149,13 +163,13 @@ output AZURE_CONTAINER_APP_NAME string = app.outputs.webAppName
 output WEB_ENDPOINT string = app.outputs.webEndpoint
 output WEB_IDENTITY_PRINCIPAL_ID string = app.outputs.webIdentityPrincipalId
 
-// Foundry outputs (empty strings when createFoundry=false)
-output FOUNDRY_PROJECT_ENDPOINT string = createFoundry ? foundry.outputs.projectEndpoint : ''
-output FOUNDRY_ACCOUNT_NAME string = createFoundry ? foundry.outputs.accountName : ''
-output FOUNDRY_PROJECT_PRINCIPAL_ID string = createFoundry ? foundry.outputs.projectPrincipalId : ''
+// Foundry outputs (empty strings when Foundry not provisioned)
+output FOUNDRY_PROJECT_ENDPOINT string = effectiveCreateFoundry ? foundry.outputs.projectEndpoint : ''
+output FOUNDRY_ACCOUNT_NAME string = effectiveCreateFoundry ? foundry.outputs.accountName : ''
+output FOUNDRY_PROJECT_PRINCIPAL_ID string = effectiveCreateFoundry ? foundry.outputs.projectPrincipalId : ''
 
 // Agent provisioning flags
-output CREATE_FOUNDRY string = string(createFoundry)
+output CREATE_FOUNDRY string = string(effectiveCreateFoundry)
 output CREATE_AGENT string = string(createAgent)
 output AGENT_MODEL_DEPLOYMENT_NAME string = createAgent ? agentModelDeploymentName : ''
-output AGENT_NAME string = createAgent ? (!empty(agentName) ? agentName : voiceLiveAgentName) : ''
+output AGENT_NAME string = createAgent ? agentName : ''
