@@ -9,6 +9,7 @@ import java.util.function.Consumer;
 import com.azure.ai.voicelive.VoiceLiveAsyncClient;
 import com.azure.ai.voicelive.VoiceLiveClientBuilder;
 import com.azure.ai.voicelive.VoiceLiveSessionAsyncClient;
+import com.azure.ai.voicelive.models.AgentSessionConfig;
 import com.azure.ai.voicelive.models.AudioEchoCancellation;
 import com.azure.ai.voicelive.models.AudioInputTranscriptionOptions;
 import com.azure.ai.voicelive.models.AudioInputTranscriptionOptionsModel;
@@ -19,16 +20,20 @@ import com.azure.ai.voicelive.models.AzureSemanticVadTurnDetectionEn;
 import com.azure.ai.voicelive.models.AzureSemanticVadTurnDetectionMultilingual;
 import com.azure.ai.voicelive.models.AzureStandardVoice;
 import com.azure.ai.voicelive.models.InputAudioFormat;
+import com.azure.ai.voicelive.models.InterimResponseTrigger;
 import com.azure.ai.voicelive.models.InputTextContentPart;
 import com.azure.ai.voicelive.models.InteractionModality;
+import com.azure.ai.voicelive.models.LlmInterimResponseConfig;
 import com.azure.ai.voicelive.models.OpenAIVoice;
 import com.azure.ai.voicelive.models.OpenAIVoiceName;
 import com.azure.ai.voicelive.models.OutputAudioFormat;
 import com.azure.ai.voicelive.models.ServerEventType;
+import com.azure.ai.voicelive.models.ServerEventWarning;
 import com.azure.ai.voicelive.models.ServerVadTurnDetection;
 import com.azure.ai.voicelive.models.SessionUpdate;
 import com.azure.ai.voicelive.models.SessionUpdateConversationItemInputAudioTranscriptionCompleted;
 import com.azure.ai.voicelive.models.SessionUpdateError;
+import com.azure.ai.voicelive.models.StaticInterimResponseConfig;
 import com.azure.ai.voicelive.models.SessionUpdateErrorDetails;
 import com.azure.ai.voicelive.models.SessionUpdateResponseAudioDelta;
 import com.azure.ai.voicelive.models.SessionUpdateResponseAudioTranscriptDelta;
@@ -97,9 +102,28 @@ public class VoiceLiveHandler {
 
             client = builder.buildAsyncClient();
 
-            // Start session — agent mode uses model-mode connection (KNOWN ISSUE: no agent config in Java SDK)
-            String model = config.getModel();
-            session = client.startSession(model).block();
+            // Start session — agent mode uses AgentSessionConfig, model mode uses model string
+            if ("agent".equals(config.getMode()) && config.getAgentName() != null && config.getProjectName() != null) {
+                AgentSessionConfig agentConfig = new AgentSessionConfig(config.getAgentName(), config.getProjectName());
+                if (config.getAgentVersion() != null && !config.getAgentVersion().isBlank()) {
+                    agentConfig.setAgentVersion(config.getAgentVersion());
+                }
+                if (config.getConversationId() != null && !config.getConversationId().isBlank()) {
+                    agentConfig.setConversationId(config.getConversationId());
+                }
+                if (config.getFoundryResourceOverride() != null && !config.getFoundryResourceOverride().isBlank()) {
+                    agentConfig.setFoundryResourceOverride(config.getFoundryResourceOverride());
+                }
+                if (config.getAuthIdentityClientId() != null && !config.getAuthIdentityClientId().isBlank()) {
+                    agentConfig.setAuthenticationIdentityClientId(config.getAuthIdentityClientId());
+                }
+                session = client.startSession(agentConfig).block();
+                logger.info("[{}] Started agent session (agent={}, project={})", clientId, config.getAgentName(), config.getProjectName());
+            } else {
+                String model = config.getModel();
+                session = client.startSession(model).block();
+                logger.info("[{}] Started model session (model={})", clientId, model);
+            }
 
             if (session == null) {
                 throw new IllegalStateException("Failed to start VoiceLive session");
@@ -235,6 +259,38 @@ public class VoiceLiveHandler {
         }
         options.setInputAudioTranscription(transcription);
 
+        // Interim response configuration
+        if (config.isInterimResponse()) {
+            java.util.List<InterimResponseTrigger> triggers = new java.util.ArrayList<>();
+            if (config.isInterimTriggerLatency()) {
+                triggers.add(InterimResponseTrigger.LATENCY);
+            }
+            if (config.isInterimTriggerTool()) {
+                triggers.add(InterimResponseTrigger.TOOL);
+            }
+
+            if ("static".equals(config.getInterimResponseType())) {
+                StaticInterimResponseConfig staticConfig = new StaticInterimResponseConfig();
+                staticConfig.setTriggers(triggers);
+                if (config.getInterimStaticTexts() != null && !config.getInterimStaticTexts().isBlank()) {
+                    staticConfig.setTexts(java.util.List.of(config.getInterimStaticTexts().split("\\|")));
+                }
+                options.setInterimResponse(BinaryData.fromObject(staticConfig));
+            } else {
+                LlmInterimResponseConfig llmConfig = new LlmInterimResponseConfig();
+                llmConfig.setTriggers(triggers);
+                if (config.getInterimInstructions() != null && !config.getInterimInstructions().isBlank()) {
+                    llmConfig.setInstructions(config.getInterimInstructions());
+                }
+                if (config.isInterimTriggerLatency()) {
+                    llmConfig.setLatencyThresholdMs(config.getInterimLatencyMs());
+                }
+                options.setInterimResponse(BinaryData.fromObject(llmConfig));
+            }
+            logger.info("[{}] Interim response enabled (type={}, triggers={})",
+                    clientId, config.getInterimResponseType(), triggers);
+        }
+
         // Configure via typed API
         session.configureSession(options).block();
 
@@ -324,6 +380,8 @@ public class VoiceLiveHandler {
                 handleAssistantTranscriptDelta(event);
             } else if (ServerEventType.ERROR.equals(type)) {
                 handleError(event);
+            } else if (ServerEventType.WARNING.equals(type)) {
+                handleWarning(event);
             }
         } catch (Exception e) {
             logger.error("[{}] Event handling error: {}", clientId, e.getMessage());
@@ -457,6 +515,13 @@ public class VoiceLiveHandler {
         }
         logger.error("[{}] VoiceLive error event: {}", clientId, message);
         send("error", "message", message);
+    }
+
+    private void handleWarning(SessionUpdate event) {
+        if (event instanceof ServerEventWarning warningEvent) {
+            String message = warningEvent.getWarning() != null ? warningEvent.getWarning().getMessage() : "Unknown warning";
+            logger.warn("[{}] VoiceLive warning: {}", clientId, message);
+        }
     }
 
     // ------------------------------------------------------------------

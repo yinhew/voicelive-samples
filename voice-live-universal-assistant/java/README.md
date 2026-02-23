@@ -1,6 +1,6 @@
 # Voice Live Universal Assistant — Java Backend
 
-Java (Spring Boot) backend for the Voice Live Universal Assistant, using the `azure-ai-voicelive` Java SDK (1.0.0-beta.4).
+Java (Spring Boot) backend for the Voice Live Universal Assistant, using the `azure-ai-voicelive` Java SDK (1.0.0-beta.5).
 
 ## Prerequisites
 

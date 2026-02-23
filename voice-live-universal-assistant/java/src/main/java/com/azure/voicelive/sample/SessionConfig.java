@@ -39,7 +39,7 @@ public class SessionConfig {
     private String greetingType = "llm";
     private String greetingText = "";
 
-    // Interim response (KNOWN ISSUE: not supported in Java SDK beta.4)
+    // Interim response
     private boolean interimResponse = false;
     private String interimResponseType = "llm";
     private boolean interimTriggerTool = true;
