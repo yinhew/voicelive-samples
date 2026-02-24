@@ -1,0 +1,22 @@
+{
+  "name": "voice-live-universal-assistant-js",
+  "version": "1.0.0",
+  "description": "Azure Voice Live Universal Assistant - JavaScript/Node.js Backend",
+  "type": "module",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "node --watch app.js"
+  },
+  "dependencies": {
+    "@azure/ai-voicelive": "1.0.0-beta.3",
+    "@azure/identity": "^4.6.0",
+    "@azure/core-auth": "^1.9.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.0",
+    "express-ws": "^5.0.2"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
