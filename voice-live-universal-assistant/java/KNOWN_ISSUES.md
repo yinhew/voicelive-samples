@@ -2,17 +2,7 @@
 
 This document tracks known gaps and workarounds in the Java backend implementation.
 
-## Resolved in 1.0.0-beta.5
-
-The following issues from beta.4 have been resolved:
-
-- ✅ **Interim Response** — `LlmInterimResponseConfig`, `StaticInterimResponseConfig`, and `InterimResponseTrigger` are now available. The backend fully supports interim response configuration from the frontend.
-- ✅ **Agent Configuration** — `AgentSessionConfig` with `client.startSession(agentConfig)` replaces the model-mode fallback. Agent name, project, version, conversation ID, and Foundry resource override are now sent to the service.
-- ✅ **Pre-generated Greeting** — Now uses the typed API (`ResponseCreateParams.setPreGeneratedAssistantMessage(AssistantMessageItem)`) with `OutputTextContentPart`. The raw JSON workaround from beta.4 has been removed.
-
-## Remaining Issues
-
-### 1. API Version Pinning (Critical)
+## 1. API Version Pinning (Critical)
 
 **Issue:** `VoiceLiveServiceVersion.getLatest()` returns `V2025_10_01` (GA), not the preview version.
 
@@ -20,7 +10,7 @@ The following issues from beta.4 have been resolved:
 
 **Workaround:** The backend explicitly sets `.serviceVersion(VoiceLiveServiceVersion.V2026_01_01_PREVIEW)` on the `VoiceLiveClientBuilder`. This will be removable once the SDK defaults to the correct version.
 
-### 2. .env File Loading
+## 2. .env File Loading
 
 **Issue:** Java doesn't have a built-in `dotenv` equivalent. The Python backend uses `python-dotenv`.
 
@@ -28,7 +18,7 @@ The following issues from beta.4 have been resolved:
 
 **Workaround:** Environment variable lookups check `System.getenv()` first, then fall back to `System.getProperty()` (set by the `.env` loader). For production, set environment variables directly.
 
-### 3. Netty Version Mismatch Warning
+## 3. Netty Version Mismatch Warning
 
 **Issue:** Spring Boot 3.3.6 bundles Netty 4.1.115.Final, while the Azure SDK wants 4.1.130.Final.
 
