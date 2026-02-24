@@ -81,8 +81,12 @@ export class VoiceHandler {
         );
       }
 
-      // 4. Configure the session
-      const sessionConfig = this._buildSessionConfig();
+      // 4. Configure the session — agent mode uses a leaner config
+      //    (no transcription, temperature, instructions — those are agent-managed)
+      const sessionConfig =
+        mode === "agent"
+          ? this._buildAgentSessionConfig()
+          : this._buildSessionConfig();
       await this.session.updateSession(sessionConfig);
 
       console.log(
@@ -367,7 +371,7 @@ export class VoiceHandler {
       cfg.instructions = this.config.instructions;
     }
     if (this.config.echoCancellation !== false) {
-      cfg.inputAudioEchoCancellation = { type: "azure_echo_cancellation" };
+      cfg.inputAudioEchoCancellation = { type: "server_echo_cancellation" };
     }
     if (this.config.noiseReduction !== false) {
       cfg.inputAudioNoiseReduction = { type: "azure_deep_noise_suppression" };
@@ -391,7 +395,7 @@ export class VoiceHandler {
     };
 
     if (this.config.echoCancellation !== false) {
-      cfg.inputAudioEchoCancellation = { type: "azure_echo_cancellation" };
+      cfg.inputAudioEchoCancellation = { type: "server_echo_cancellation" };
     }
     if (this.config.noiseReduction !== false) {
       cfg.inputAudioNoiseReduction = { type: "azure_deep_noise_suppression" };
