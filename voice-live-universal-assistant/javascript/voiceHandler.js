@@ -3,7 +3,7 @@
  * Supports Agent mode (Foundry Agent Service) and Model mode (direct gpt-realtime).
  */
 
-import { VoiceLiveClient } from "@azure/ai-voicelive";
+import { VoiceLiveClient, KnownClientEventType } from "@azure/ai-voicelive";
 
 // ---------------------------------------------------------------------------
 // VAD type string → SDK object mapping
@@ -37,7 +37,6 @@ export class VoiceHandler {
 
     this.client = null;
     this.session = null;
-    this.subscription = null;
     this.isRunning = false;
     this.greetingSent = false;
     this._assistantTranscript = "";
@@ -63,16 +62,24 @@ export class VoiceHandler {
         apiVersion: "2026-01-01-preview",
       });
 
-      // 2. Start session (agent vs. model)
+      // 2. Build event handlers BEFORE connecting so we catch onConnected
+      //    and session.created events.
+      const handlers = this._buildEventHandlers();
+
+      // 3. Start session — pass handlers via sessionHandlers so the SDK
+      //    subscribes before connect() (avoids missing onConnected).
       if (mode === "agent") {
         const agentConfig = this._buildAgentConfig();
-        this.session = await this.client.startSession({ agent: agentConfig });
+        this.session = await this.client.startSession(
+          { agent: agentConfig },
+          { sessionHandlers: handlers },
+        );
       } else {
-        this.session = await this.client.startSession({ model });
+        this.session = await this.client.startSession(
+          { model },
+          { sessionHandlers: handlers },
+        );
       }
-
-      // 3. Subscribe to SDK events BEFORE configuring (so we catch session.updated)
-      this.subscription = this.session.subscribe(this._buildEventHandlers());
 
       // 4. Configure the session
       const sessionConfig = this._buildSessionConfig();
@@ -102,7 +109,10 @@ export class VoiceHandler {
   async interrupt() {
     if (!this.session) return;
     try {
-      await this.session.cancelResponse();
+      await this.session.sendEvent({
+        type: KnownClientEventType.ResponseCancel,
+        eventId: `evt_cancel_${Date.now()}`,
+      });
     } catch (err) {
       console.debug(`[${this.clientId}] No response to cancel:`, err.message);
     }
@@ -111,16 +121,8 @@ export class VoiceHandler {
   async stop() {
     this.isRunning = false;
     try {
-      if (this.subscription) {
-        this.subscription.close();
-        this.subscription = null;
-      }
-    } catch (err) {
-      console.debug(`[${this.clientId}] Subscription close error:`, err.message);
-    }
-    try {
       if (this.session) {
-        this.session.dispose();
+        await this.session.dispose();
         this.session = null;
       }
     } catch (err) {
@@ -136,18 +138,24 @@ export class VoiceHandler {
 
   _buildEventHandlers() {
     return {
-      onConnected: () => {
+      onConnected: async (_args, _context) => {
         console.log(`[${this.clientId}] SDK connected`);
       },
 
-      onDisconnected: () => {
+      onDisconnected: async (_args, _context) => {
         console.log(`[${this.clientId}] SDK disconnected`);
         this.isRunning = false;
       },
 
-      onError: (error) => {
-        const message = error?.message || String(error);
-        const code = error?.code || "";
+      onError: async (args, _context) => {
+        const message = args?.error?.message || String(args?.error || args);
+        console.error(`[${this.clientId}] VoiceLive connection error: ${message}`);
+        this.sendMessage({ type: "error", message });
+      },
+
+      onServerError: async (event, _context) => {
+        const message = event?.error?.message || String(event?.error || event);
+        const code = event?.error?.code || "";
 
         // Benign cancellation errors — don't surface to client
         if (
@@ -158,15 +166,15 @@ export class VoiceHandler {
           return;
         }
 
-        console.error(`[${this.clientId}] VoiceLive error event: ${message}`);
+        console.error(`[${this.clientId}] VoiceLive server error: ${message}`);
         this.sendMessage({ type: "error", message });
       },
 
-      onResponseCreated: () => {
+      onResponseCreated: async (_event, _context) => {
         this.sendMessage({ type: "status", state: "speaking" });
       },
 
-      onResponseDone: () => {
+      onResponseDone: async (_event, _context) => {
         // Flush accumulated assistant transcript as final
         if (this._assistantTranscript) {
           this.sendMessage({
@@ -180,7 +188,7 @@ export class VoiceHandler {
         this.sendMessage({ type: "status", state: "listening" });
       },
 
-      onResponseAudioDelta: (event) => {
+      onResponseAudioDelta: async (event, _context) => {
         if (event.delta) {
           const audioBase64 = Buffer.from(event.delta).toString("base64");
           this.sendMessage({
@@ -193,7 +201,7 @@ export class VoiceHandler {
         }
       },
 
-      onResponseAudioTranscriptDelta: (event) => {
+      onResponseAudioTranscriptDelta: async (event, _context) => {
         const deltaText = event.delta || "";
         if (deltaText) {
           this._assistantTranscript += deltaText;
@@ -206,22 +214,25 @@ export class VoiceHandler {
         }
       },
 
-      onInputAudioBufferSpeechStarted: () => {
+      onInputAudioBufferSpeechStarted: async (_event, _context) => {
         this.sendMessage({ type: "status", state: "listening" });
         this.sendMessage({ type: "stop_playback" });
         // Cancel any in-progress response (barge-in)
         try {
-          this.session?.cancelResponse();
+          await this.session?.sendEvent({
+            type: KnownClientEventType.ResponseCancel,
+            eventId: `evt_bargein_${Date.now()}`,
+          });
         } catch (_) {
           // Ignore — may not have an active response
         }
       },
 
-      onInputAudioBufferSpeechStopped: () => {
+      onInputAudioBufferSpeechStopped: async (_event, _context) => {
         this.sendMessage({ type: "status", state: "thinking" });
       },
 
-      onConversationItemInputAudioTranscriptionCompleted: (event) => {
+      onConversationItemInputAudioTranscriptionCompleted: async (event, _context) => {
         const transcript = event.transcript || "";
         if (transcript) {
           this.sendMessage({
@@ -234,7 +245,7 @@ export class VoiceHandler {
       },
 
       // Catch-all — handles session.updated and any other server events
-      onServerEvent: (event) => {
+      onServerEvent: async (event, _context) => {
         const eventType = event?.type || "";
 
         if (eventType === "session.updated") {
@@ -292,11 +303,15 @@ export class VoiceHandler {
     const text =
       this.config.greetingText || "Welcome! I'm here to help you get started.";
     try {
-      await this.session.startResponse({
-        preGeneratedAssistantMessage: {
-          type: "message",
-          role: "assistant",
-          content: [{ type: "output_text", text }],
+      await this.session.sendEvent({
+        type: KnownClientEventType.ResponseCreate,
+        eventId: `evt_greeting_${Date.now()}`,
+        response: {
+          preGeneratedAssistantMessage: {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text }],
+          },
         },
       });
       console.log(`[${this.clientId}] Pre-generated greeting sent`);
@@ -315,7 +330,10 @@ export class VoiceHandler {
         role: "system",
         content: [{ type: "input_text", text: instruction }],
       });
-      await this.session.startResponse();
+      await this.session.sendEvent({
+        type: KnownClientEventType.ResponseCreate,
+        eventId: `evt_llmgreeting_${Date.now()}`,
+      });
       console.log(`[${this.clientId}] LLM-generated greeting triggered`);
     } catch (err) {
       console.warn(`[${this.clientId}] LLM-generated greeting failed:`, err.message);
@@ -459,7 +477,7 @@ export class VoiceHandler {
       return {
         type: "static_interim_response",
         triggers,
-        latencyThresholdMs: latencyMs,
+        latencyThresholdInMs: latencyMs,
         texts: texts.length > 0 ? texts : ["One moment please..."],
       };
     }
@@ -472,7 +490,7 @@ export class VoiceHandler {
     return {
       type: "llm_interim_response",
       triggers,
-      latencyThresholdMs: latencyMs,
+      latencyThresholdInMs: latencyMs,
       instructions,
     };
   }
