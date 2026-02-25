@@ -13,20 +13,20 @@ using Azure.Identity;
 /// is limited to 512 characters.
 ///
 /// Required environment variables:
-///   PROJECT_CONNECTION_STRING - Azure AI Foundry project connection string
+///   PROJECT_ENDPOINT - Azure AI Foundry project connection string
 ///   AGENT_NAME               - Name for the agent
 ///   MODEL_DEPLOYMENT_NAME    - Model deployment name (e.g., gpt-4o-mini)
 /// </summary>
 
 // <create_agent>
-var connectionString = Environment.GetEnvironmentVariable("PROJECT_CONNECTION_STRING");
+var connectionString = Environment.GetEnvironmentVariable("PROJECT_ENDPOINT");
 var agentName = Environment.GetEnvironmentVariable("AGENT_NAME");
 var model = Environment.GetEnvironmentVariable("MODEL_DEPLOYMENT_NAME");
 
 if (string.IsNullOrEmpty(connectionString) || string.IsNullOrEmpty(agentName)
     || string.IsNullOrEmpty(model))
 {
-    Console.Error.WriteLine("Set PROJECT_CONNECTION_STRING, AGENT_NAME, and MODEL_DEPLOYMENT_NAME environment variables.");
+    Console.Error.WriteLine("Set PROJECT_ENDPOINT, AGENT_NAME, and MODEL_DEPLOYMENT_NAME environment variables.");
     return;
 }
 
