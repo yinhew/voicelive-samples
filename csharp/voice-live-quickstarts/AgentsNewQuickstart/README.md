@@ -20,7 +20,7 @@ Set the required environment variables before running either program. You can ex
 
 ```bash
 # Required for CreateAgentWithVoiceLive.cs
-export PROJECT_CONNECTION_STRING="<your-project-connection-string>"
+export PROJECT_ENDPOINT="<your-project-endpoint>"
 export AGENT_NAME=my-voice-agent
 export MODEL_DEPLOYMENT_NAME=gpt-4o-mini
 
@@ -32,7 +32,7 @@ export PROJECT_NAME=<your-project-name>
 
 On Windows (PowerShell):
 ```powershell
-$env:PROJECT_CONNECTION_STRING = "<your-project-connection-string>"
+$env:PROJECT_ENDPOINT = "<your-project-endpoint>"
 $env:AGENT_NAME = "my-voice-agent"
 $env:MODEL_DEPLOYMENT_NAME = "gpt-4o-mini"
 $env:VOICELIVE_ENDPOINT = "https://<your-voicelive-endpoint>.services.ai.azure.com/"
@@ -103,7 +103,7 @@ Press **Ctrl+C** to exit gracefully.
 
 | Variable | Required | Description |
 |---|---|---|
-| `PROJECT_CONNECTION_STRING` | ✅ | Azure AI Foundry project connection string |
+| `PROJECT_ENDPOINT` | ✅ | Azure AI Foundry project connection string |
 | `AGENT_NAME` | ✅ | Name of the agent to create |
 | `MODEL_DEPLOYMENT_NAME` | ✅ | Model deployment name (e.g., `gpt-4o-mini`) |
 
@@ -124,7 +124,7 @@ Press **Ctrl+C** to exit gracefully.
 
 | Symptom | Resolution |
 |---|---|
-| `Set PROJECT_CONNECTION_STRING, AGENT_NAME, and MODEL_DEPLOYMENT_NAME` | Ensure all required environment variables are set. |
+| `Set PROJECT_ENDPOINT, AGENT_NAME, and MODEL_DEPLOYMENT_NAME` | Ensure all required environment variables are set. |
 | `Set VOICELIVE_ENDPOINT, AGENT_NAME, and PROJECT_NAME` | Ensure all required environment variables are set. |
 | `❌ No audio input devices found` | Connect a microphone and restart. |
 | `❌ No audio output devices found` | Connect speakers or headphones and restart. |
