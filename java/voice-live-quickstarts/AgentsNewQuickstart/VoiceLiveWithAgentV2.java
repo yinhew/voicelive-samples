@@ -455,7 +455,7 @@ public class VoiceLiveWithAgentV2 {
             try {
                 // Create a system message to trigger greeting
                 SystemMessageItem greetingMessage = new SystemMessageItem(
-                        Arrays.asList(new InputTextContentPart("Say something to welcome the user.")));
+                        Arrays.asList(new InputTextContentPart("Say something to welcome the user in English.")));
                 ClientEventConversationItemCreate createEvent = new ClientEventConversationItemCreate()
                         .setItem(greetingMessage);
                 session.sendEvent(createEvent).block();

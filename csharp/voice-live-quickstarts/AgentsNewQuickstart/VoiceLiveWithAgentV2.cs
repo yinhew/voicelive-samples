@@ -413,7 +413,7 @@ class BasicVoiceAssistant : IDisposable
                         role = "system",
                         content = new[]
                         {
-                            new { type = "input_text", text = "Say something to welcome the user." }
+                            new { type = "input_text", text = "Say something to welcome the user in English." }
                         }
                     }
                 }), cancellationToken).ConfigureAwait(false);

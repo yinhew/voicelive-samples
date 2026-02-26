@@ -1,11 +1,9 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-// Voice Live with Foundry Agent Service v2 - Node.js Console Voice Assistant
-// Uses @azure/ai-voicelive SDK with handler-based event subscription pattern.
-
 import "dotenv/config";
 import { VoiceLiveClient } from "@azure/ai-voicelive";
+import { AzureKeyCredential } from "@azure/core-auth";
 import { DefaultAzureCredential } from "@azure/identity";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, appendFileSync } from "node:fs";
@@ -14,9 +12,6 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// ---------------------------------------------------------------------------
-// Logging and conversation log setup
-// ---------------------------------------------------------------------------
 const logsDir = join(__dirname, "logs");
 if (!existsSync(logsDir)) mkdirSync(logsDir, { recursive: true });
 
@@ -31,14 +26,143 @@ function writeConversationLog(message) {
   appendFileSync(conversationLogFile, message + "\n", "utf-8");
 }
 
-// ---------------------------------------------------------------------------
-// Audio helpers
-// ---------------------------------------------------------------------------
+function printUsage() {
+  console.log("Usage: node model-quickstart.js [options]");
+  console.log("");
+  console.log("Options:");
+  console.log("  --api-key <key>             VoiceLive API key");
+  console.log("  --endpoint <url>            VoiceLive endpoint URL");
+  console.log("  --model <name>              Model to use (default: gpt-realtime)");
+  console.log(
+    "  --voice <name>              Voice (default: en-US-Ava:DragonHDLatestNeural)",
+  );
+  console.log("  --instructions <text>       System instructions for the assistant");
+  console.log("  --audio-input-device <name> Explicit SoX input device name (Windows)");
+  console.log("  --list-audio-devices        List available audio input devices and exit");
+  console.log("  --greeting-text <text>      Send a pre-defined greeting instead of LLM-generated");
+  console.log("  --use-token-credential      Use Azure credential instead of API key");
+  console.log("  --no-audio                  Connect and configure session without mic/speaker");
+  console.log("  -h, --help                  Show this help text");
+}
+
+function parseArguments(argv) {
+  const parsed = {
+    apiKey: process.env.AZURE_VOICELIVE_API_KEY,
+    endpoint: process.env.AZURE_VOICELIVE_ENDPOINT,
+    model: process.env.AZURE_VOICELIVE_MODEL ?? "gpt-realtime",
+    voice:
+      process.env.AZURE_VOICELIVE_VOICE ?? "en-US-Ava:DragonHDLatestNeural",
+    instructions:
+      process.env.AZURE_VOICELIVE_INSTRUCTIONS ??
+      "You are a helpful AI assistant. Respond naturally and conversationally. Keep your responses concise but engaging.",
+    audioInputDevice: process.env.AUDIO_INPUT_DEVICE,
+    listAudioDevices: false,
+    greetingText: undefined,
+    useTokenCredential: false,
+    noAudio: false,
+    help: false,
+  };
+
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    switch (arg) {
+      case "--api-key":
+        parsed.apiKey = argv[++i];
+        break;
+      case "--endpoint":
+        parsed.endpoint = argv[++i];
+        break;
+      case "--model":
+        parsed.model = argv[++i];
+        break;
+      case "--voice":
+        parsed.voice = argv[++i];
+        break;
+      case "--instructions":
+        parsed.instructions = argv[++i];
+        break;
+      case "--audio-input-device":
+        parsed.audioInputDevice = argv[++i];
+        break;
+      case "--list-audio-devices":
+        parsed.listAudioDevices = true;
+        break;
+      case "--greeting-text":
+        parsed.greetingText = argv[++i];
+        break;
+      case "--use-token-credential":
+        parsed.useTokenCredential = true;
+        break;
+      case "--no-audio":
+        parsed.noAudio = true;
+        break;
+      case "--help":
+      case "-h":
+        parsed.help = true;
+        break;
+      default:
+        if (arg?.startsWith("-")) {
+          throw new Error(`Unknown option: ${arg}`);
+        }
+        break;
+    }
+  }
+
+  return parsed;
+}
 
 /**
- * AudioProcessor manages microphone capture via node-record-lpcm16
- * and playback via the speaker npm package. Audio format: 24 kHz, 16-bit, mono.
+ * List available audio input devices on Windows (AudioEndpoint via WMI).
+ * Falls back to a note on non-Windows platforms.
  */
+async function listAudioDevices() {
+  if (process.platform !== "win32") {
+    console.log("Device listing is currently supported on Windows only.");
+    console.log("On macOS/Linux, run: sox -V6 -n -t coreaudio -n trim 0 0  (or similar)");
+    return;
+  }
+
+  const { execSync } = await import("node:child_process");
+  try {
+    const output = execSync(
+      'powershell -NoProfile -Command "Get-CimInstance Win32_PnPEntity | Where-Object { $_.PNPClass -eq \'AudioEndpoint\' } | Select-Object -ExpandProperty Name"',
+      { encoding: "utf-8", timeout: 10000 },
+    ).trim();
+
+    if (!output) {
+      console.log("No audio endpoint devices found.");
+      return;
+    }
+
+    console.log("Available audio endpoint devices:");
+    console.log("");
+    for (const line of output.split(/\r?\n/)) {
+      const name = line.trim();
+      if (name) console.log(`  ${name}`);
+    }
+    console.log("");
+    console.log("Use the device name (or a unique substring) with --audio-input-device.");
+    console.log('Example: node model-quickstart.js --audio-input-device "Microphone"');
+  } catch (err) {
+    console.error("Failed to query audio devices:", err.message);
+  }
+}
+
+function resolveVoiceConfig(voiceName) {
+  const looksLikeAzureVoice = voiceName.includes("-") || voiceName.includes(":");
+  if (looksLikeAzureVoice) {
+    return {
+      type: "azure-standard",
+      name: voiceName,
+    };
+  }
+
+  return {
+    type: "openai",
+    name: voiceName,
+  };
+}
+
 class AudioProcessor {
   constructor(enableAudio = true, inputDevice = undefined) {
     this._enableAudio = enableAudio;
@@ -68,7 +192,6 @@ class AudioProcessor {
     }
   }
 
-  /** Start capturing microphone audio and forward PCM chunks to the session. */
   async startCapture(session) {
     if (!this._enableAudio) {
       console.log("[audio] --no-audio enabled: microphone capture skipped");
@@ -104,7 +227,7 @@ class AudioProcessor {
       this._soxProcess.stdout.on("data", (chunk) => {
         if (session.isConnected) {
           session.sendAudio(new Uint8Array(chunk)).catch(() => {
-            /* ignore send errors after disconnect */
+            // Ignore send errors during disconnect
           });
         }
       });
@@ -133,21 +256,23 @@ class AudioProcessor {
 
     await this._ensureAudioModulesLoaded();
 
-    this._recorder = this._recordModule.record({
+    const recorderOptions = {
       sampleRate: 24000,
       channels: 1,
       audioType: "raw",
       recorder: "sox",
       encoding: "signed-integer",
       bitwidth: 16,
-    });
+    };
+
+    this._recorder = this._recordModule.record(recorderOptions);
 
     const recorderStream = this._recorder.stream();
 
     recorderStream.on("data", (chunk) => {
       if (session.isConnected) {
         session.sendAudio(new Uint8Array(chunk)).catch(() => {
-          /* ignore send errors after disconnect */
+          // Ignore send errors during disconnect
         });
       }
     });
@@ -162,7 +287,6 @@ class AudioProcessor {
     console.log("[audio] Microphone capture started");
   }
 
-  /** Initialise the speaker for playback. */
   async startPlayback() {
     if (!this._enableAudio) {
       console.log("[audio] --no-audio enabled: speaker playback skipped");
@@ -173,33 +297,30 @@ class AudioProcessor {
     console.log("[audio] Playback ready");
   }
 
-  /** Queue a PCM16 buffer (base64 from service) for playback. */
   queueAudio(base64Delta) {
     const seq = this._nextSeq++;
-    if (seq < this._skipSeq) return; // skip if barge-in happened
-    const buf = Buffer.from(base64Delta, "base64");
+    if (seq < this._skipSeq) return;
+
+    const chunk = Buffer.from(base64Delta, "base64");
     if (this._speaker && !this._speaker.destroyed) {
-      this._speaker.write(buf);
+      this._speaker.write(chunk);
     }
   }
 
-  /** Discard queued audio (barge-in). */
   skipPendingAudio() {
     if (!this._enableAudio) return;
     this._skipSeq = this._nextSeq++;
-    // Reset speaker to flush its internal buffer
     this._resetSpeaker().catch(() => {
       // best-effort reset
     });
   }
 
-  /** Shut down capture and playback. */
   shutdown() {
     if (this._soxProcess) {
       try {
         this._soxProcess.kill();
       } catch {
-        /* ignore */
+        // no-op
       }
       this._soxProcess = null;
     }
@@ -208,14 +329,15 @@ class AudioProcessor {
       this._recorder.stop();
       this._recorder = null;
     }
+
     if (this._speaker) {
       this._speaker.end();
       this._speaker = null;
     }
+
     console.log("[audio] Audio processor shut down");
   }
 
-  /** (Re-)create the Speaker instance. */
   async _resetSpeaker() {
     await this._ensureAudioModulesLoaded();
 
@@ -223,94 +345,72 @@ class AudioProcessor {
       try {
         this._speaker.end();
       } catch {
-        /* ignore */
+        // no-op
       }
     }
+
     this._speaker = new this._speakerCtor({
       channels: 1,
       bitDepth: 16,
       sampleRate: 24000,
       signed: true,
     });
-    // Swallow speaker errors (e.g. device busy after barge-in reset)
-    this._speaker.on("error", () => {});
+
+    this._speaker.on("error", () => {
+      // Swallow transient audio device errors
+    });
   }
 }
 
-// ---------------------------------------------------------------------------
-// BasicVoiceAssistant
-// ---------------------------------------------------------------------------
-class BasicVoiceAssistant {
-  /**
-   * @param {object} opts
-   * @param {string} opts.endpoint
-   * @param {import("@azure/identity").TokenCredential} opts.credential
-   * @param {string} opts.agentName
-   * @param {string} opts.projectName
-   * @param {string} [opts.agentVersion]
-   * @param {string} [opts.conversationId]
-   * @param {string} [opts.foundryResourceOverride]
-   * @param {string} [opts.authenticationIdentityClientId]
-   * @param {string} [opts.audioInputDevice]
-   * @param {string} [opts.greetingText]
-   * @param {boolean} [opts.noAudio]
-   */
-  constructor(opts) {
-    this.endpoint = opts.endpoint;
-    this.credential = opts.credential;
-    this.greetingText = opts.greetingText;
-    this.noAudio = opts.noAudio;
-    this.agentConfig = {
-      agentName: opts.agentName,
-      projectName: opts.projectName,
-      ...(opts.agentVersion && { agentVersion: opts.agentVersion }),
-      ...(opts.conversationId && { conversationId: opts.conversationId }),
-      ...(opts.foundryResourceOverride && {
-        foundryResourceOverride: opts.foundryResourceOverride,
-      }),
-      ...(opts.foundryResourceOverride &&
-        opts.authenticationIdentityClientId && {
-          authenticationIdentityClientId: opts.authenticationIdentityClientId,
-        }),
-    };
+class BasicModelVoiceAssistant {
+  constructor(options) {
+    this.endpoint = options.endpoint;
+    this.credential = options.credential;
+    this.model = options.model;
+    this.voice = options.voice;
+    this.instructions = options.instructions;
+    this.audioInputDevice = options.audioInputDevice;
+    this.greetingText = options.greetingText;
+    this.noAudio = options.noAudio;
 
     this._session = null;
-    this._audio = new AudioProcessor(!opts.noAudio, opts.audioInputDevice);
-    this._greetingSent = false;
+    this._subscription = null;
+    this._audio = new AudioProcessor(!options.noAudio, options.audioInputDevice);
     this._activeResponse = false;
     this._responseApiDone = false;
+    this._greetingSent = false;
   }
 
-  /** Connect, subscribe to events, and run until interrupted. */
   async start() {
     const client = new VoiceLiveClient(this.endpoint, this.credential);
-    const session = client.createSession({ agent: this.agentConfig });
+    const session = client.createSession({ model: this.model });
     this._session = session;
 
     console.log(
-      `[init] Connecting to VoiceLive with agent "${this.agentConfig.agentName}" ` +
-        `for project "${this.agentConfig.projectName}" ...`,
+      `[init] Connecting to VoiceLive with model "${this.model}" at "${this.endpoint}" ...`,
     );
 
-    // Subscribe to VoiceLive events BEFORE connecting, so the
-    // SESSION_UPDATED event is not missed.
-    const subscription = session.subscribe({
+    this._subscription = session.subscribe({
       onSessionUpdated: async (event, context) => {
         const s = event.session;
-        const agent = s?.agent;
+        const model = s?.model;
         const voice = s?.voice;
+
         console.log(`[session] Session ready: ${context.sessionId}`);
         writeConversationLog(
           [
             `SessionID: ${context.sessionId}`,
-            `Agent Name: ${agent?.name ?? ""}`,
-            `Agent Description: ${agent?.description ?? ""}`,
-            `Agent ID: ${agent?.agentId ?? ""}`,
+            `Model: ${typeof model === "string" ? model : model?.toString?.() ?? ""}`,
             `Voice Name: ${voice?.name ?? ""}`,
             `Voice Type: ${voice?.type ?? ""}`,
             "",
           ].join("\n"),
         );
+
+        // Proactive greeting — fire once per session
+        if (!this._greetingSent) {
+          this._greetingSent = true;
+        }
       },
 
       onConversationItemInputAudioTranscriptionCompleted: async (event) => {
@@ -321,21 +421,20 @@ class BasicVoiceAssistant {
 
       onResponseTextDone: async (event) => {
         const text = event.text ?? "";
-        console.log(`🤖 Agent responded with text:\t${text}`);
-        writeConversationLog(`Agent Text Response:\t${text}`);
+        console.log(`🤖 Assistant text:\t${text}`);
+        writeConversationLog(`Assistant Text Response:\t${text}`);
       },
 
       onResponseAudioTranscriptDone: async (event) => {
         const transcript = event.transcript ?? "";
-        console.log(`🤖 Agent responded with audio transcript:\t${transcript}`);
-        writeConversationLog(`Agent Audio Response:\t${transcript}`);
+        console.log(`🤖 Assistant audio transcript:\t${transcript}`);
+        writeConversationLog(`Assistant Audio Response:\t${transcript}`);
       },
 
       onInputAudioBufferSpeechStarted: async () => {
         console.log("🎤 Listening...");
         this._audio.skipPendingAudio();
 
-        // Cancel in-progress response (barge-in)
         if (this._activeResponse && !this._responseApiDone) {
           try {
             await session.sendEvent({ type: "response.cancel" });
@@ -376,7 +475,6 @@ class BasicVoiceAssistant {
       onServerError: async (event) => {
         const msg = event.error?.message ?? "";
         if (msg.includes("Cancellation failed: no active response")) {
-          // Benign – ignore
           return;
         }
         console.error(`❌ VoiceLive error: ${msg}`);
@@ -385,13 +483,12 @@ class BasicVoiceAssistant {
       onConversationItemCreated: async (event) => {
         console.log(`[event] Conversation item created: ${event.item?.id ?? ""}`);
       },
+
     });
 
-    // Connect after subscribing so SESSION_UPDATED is not missed
     await session.connect();
     console.log("[init] Connected to VoiceLive session websocket");
 
-    // Configure session eagerly after connect
     await this._setupSession();
 
     // Proactive greeting
@@ -400,15 +497,14 @@ class BasicVoiceAssistant {
       await this._sendProactiveGreeting();
     }
 
-    // Start audio after session is configured
     await this._audio.startPlayback();
     await this._audio.startCapture(session);
 
-    console.log("\n" + "=".repeat(65));
+    console.log("\n" + "=".repeat(60));
     console.log("🎤 VOICE ASSISTANT READY");
     console.log("Start speaking to begin conversation");
     console.log("Press Ctrl+C to exit");
-    console.log("=".repeat(65) + "\n");
+    console.log("=".repeat(60) + "\n");
 
     if (this.noAudio) {
       setTimeout(() => {
@@ -416,15 +512,11 @@ class BasicVoiceAssistant {
       }, 6000);
     }
 
-    // Keep the process alive until disconnect or Ctrl+C
     await new Promise((resolve) => {
-      const onSigint = () => {
-        resolve();
-      };
-      process.once("SIGINT", onSigint);
-      process.once("SIGTERM", onSigint);
+      const onSignal = () => resolve();
+      process.once("SIGINT", onSignal);
+      process.once("SIGTERM", onSignal);
 
-      // Also resolve if subscription closes (e.g. server-side disconnect)
       const poll = setInterval(() => {
         if (!session.isConnected) {
           clearInterval(poll);
@@ -433,19 +525,7 @@ class BasicVoiceAssistant {
       }, 500);
     });
 
-    // Cleanup
-    await subscription.close();
-    try {
-      await session.disconnect();
-    } catch {
-      // ignore disconnect errors during shutdown
-    }
-    this._audio.shutdown();
-    try {
-      await session.dispose();
-    } catch {
-      // ignore dispose errors during shutdown
-    }
+    await this.shutdown();
   }
 
   /**
@@ -471,7 +551,7 @@ class BasicVoiceAssistant {
         console.error("[session] Failed to send pre-generated greeting:", err.message);
       }
     } else {
-      // LLM-generated greeting (default)
+      // LLM-generated greeting (default — same pattern as AgentsNewQuickstart)
       console.log("[session] Sending proactive greeting ...");
       try {
         await session.addConversationItem({
@@ -491,155 +571,56 @@ class BasicVoiceAssistant {
     }
   }
 
-  /** Configure session modalities, audio format, and interim response. */
   async _setupSession() {
     console.log("[session] Configuring session ...");
+
     await this._session.updateSession({
+      model: this.model,
       modalities: ["text", "audio"],
+      instructions: this.instructions,
+      voice: resolveVoiceConfig(this.voice),
       inputAudioFormat: "pcm16",
       outputAudioFormat: "pcm16",
-      interimResponse: {
-        type: "llm_interim_response",
-        triggers: ["tool", "latency"],
-        latencyThresholdInMs: 100,
-        instructions:
-          "Create friendly interim responses indicating wait time due to ongoing processing, if any. " +
-          "Do not include in all responses! Do not say you don't have real-time access to information when calling tools!",
+      turnDetection: {
+        type: "server_vad",
+        threshold: 0.5,
+        prefixPaddingInMs: 300,
+        silenceDurationInMs: 500,
       },
+      inputAudioEchoCancellation: { type: "server_echo_cancellation" },
+      inputAudioNoiseReduction: { type: "azure_deep_noise_suppression" },
+      inputAudioTranscription: { model: "azure-speech" },
     });
+
     console.log("[session] Session configuration sent");
   }
-}
 
-// ---------------------------------------------------------------------------
-// CLI helpers
-// ---------------------------------------------------------------------------
-
-function printUsage() {
-  console.log("Usage: node voice-live-with-agent-v2.js [options]");
-  console.log("");
-  console.log("Options:");
-  console.log("  --endpoint <url>            VoiceLive endpoint URL");
-  console.log("  --agent-name <name>         Foundry agent name");
-  console.log("  --project-name <name>       Foundry project name");
-  console.log("  --agent-version <ver>       Agent version");
-  console.log("  --conversation-id <id>      Conversation ID to resume");
-  console.log("  --foundry-resource <name>   Foundry resource override");
-  console.log("  --auth-client-id <id>       Authentication identity client ID");
-  console.log("  --audio-input-device <name> Explicit SoX input device name (Windows)");
-  console.log("  --list-audio-devices        List available audio input devices and exit");
-  console.log("  --greeting-text <text>      Send a pre-defined greeting instead of LLM-generated");
-  console.log("  --no-audio                  Connect and configure session without mic/speaker");
-  console.log("  -h, --help                  Show this help text");
-}
-
-function parseArguments(argv) {
-  const parsed = {
-    endpoint: process.env.VOICELIVE_ENDPOINT ?? "",
-    agentName: process.env.AGENT_NAME ?? "",
-    projectName: process.env.PROJECT_NAME ?? "",
-    agentVersion: process.env.AGENT_VERSION,
-    conversationId: process.env.CONVERSATION_ID,
-    foundryResourceOverride: process.env.FOUNDRY_RESOURCE_OVERRIDE,
-    authenticationIdentityClientId:
-      process.env.AGENT_AUTHENTICATION_IDENTITY_CLIENT_ID,
-    audioInputDevice: process.env.AUDIO_INPUT_DEVICE,
-    listAudioDevices: false,
-    greetingText: undefined,
-    noAudio: false,
-    help: false,
-  };
-
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    switch (arg) {
-      case "--endpoint":
-        parsed.endpoint = argv[++i];
-        break;
-      case "--agent-name":
-        parsed.agentName = argv[++i];
-        break;
-      case "--project-name":
-        parsed.projectName = argv[++i];
-        break;
-      case "--agent-version":
-        parsed.agentVersion = argv[++i];
-        break;
-      case "--conversation-id":
-        parsed.conversationId = argv[++i];
-        break;
-      case "--foundry-resource":
-        parsed.foundryResourceOverride = argv[++i];
-        break;
-      case "--auth-client-id":
-        parsed.authenticationIdentityClientId = argv[++i];
-        break;
-      case "--audio-input-device":
-        parsed.audioInputDevice = argv[++i];
-        break;
-      case "--list-audio-devices":
-        parsed.listAudioDevices = true;
-        break;
-      case "--greeting-text":
-        parsed.greetingText = argv[++i];
-        break;
-      case "--no-audio":
-        parsed.noAudio = true;
-        break;
-      case "--help":
-      case "-h":
-        parsed.help = true;
-        break;
-      default:
-        if (arg?.startsWith("-")) {
-          throw new Error(`Unknown option: ${arg}`);
-        }
-        break;
-    }
-  }
-
-  return parsed;
-}
-
-/**
- * List available audio input devices on Windows (AudioEndpoint via WMI).
- */
-async function listAudioDevices() {
-  if (process.platform !== "win32") {
-    console.log("Device listing is currently supported on Windows only.");
-    console.log("On macOS/Linux, run: sox -V6 -n -t coreaudio -n trim 0 0  (or similar)");
-    return;
-  }
-
-  const { execSync } = await import("node:child_process");
-  try {
-    const output = execSync(
-      'powershell -NoProfile -Command "Get-CimInstance Win32_PnPEntity | Where-Object { $_.PNPClass -eq \'AudioEndpoint\' } | Select-Object -ExpandProperty Name"',
-      { encoding: "utf-8", timeout: 10000 },
-    ).trim();
-
-    if (!output) {
-      console.log("No audio endpoint devices found.");
-      return;
+  async shutdown() {
+    if (this._subscription) {
+      await this._subscription.close();
+      this._subscription = null;
     }
 
-    console.log("Available audio endpoint devices:");
-    console.log("");
-    for (const line of output.split(/\r?\n/)) {
-      const name = line.trim();
-      if (name) console.log(`  ${name}`);
+    if (this._session) {
+      try {
+        await this._session.disconnect();
+      } catch {
+        // ignore disconnect errors during shutdown
+      }
+
+      this._audio.shutdown();
+
+      try {
+        await this._session.dispose();
+      } catch {
+        // ignore dispose errors during shutdown
+      }
+
+      this._session = null;
     }
-    console.log("");
-    console.log("Use the device name (or a unique substring) with --audio-input-device.");
-    console.log('Example: node voice-live-with-agent-v2.js --audio-input-device "Microphone"');
-  } catch (err) {
-    console.error("Failed to query audio devices:", err.message);
   }
 }
 
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
 async function main() {
   let args;
   try {
@@ -660,45 +641,46 @@ async function main() {
     return;
   }
 
-  if (!args.endpoint || !args.agentName || !args.projectName) {
+  if (!args.endpoint) {
     console.error(
-      "❌ Set VOICELIVE_ENDPOINT, AGENT_NAME, and PROJECT_NAME in your .env file or pass via CLI.",
+      "❌ Missing endpoint. Set AZURE_VOICELIVE_ENDPOINT or pass --endpoint.",
     );
-    printUsage();
     process.exit(1);
   }
 
+  if (!args.apiKey && !args.useTokenCredential) {
+    console.error("❌ No authentication provided.");
+    console.error(
+      "Provide --api-key / AZURE_VOICELIVE_API_KEY or use --use-token-credential.",
+    );
+    process.exit(1);
+  }
+
+  const credential = args.useTokenCredential
+    ? new DefaultAzureCredential()
+    : new AzureKeyCredential(args.apiKey);
+
   console.log("Configuration:");
-  console.log(`  VOICELIVE_ENDPOINT: ${args.endpoint}`);
-  console.log(`  AGENT_NAME: ${args.agentName}`);
-  console.log(`  PROJECT_NAME: ${args.projectName}`);
-  console.log(`  AGENT_VERSION: ${args.agentVersion ?? "(not set)"}`);
-  console.log(`  CONVERSATION_ID: ${args.conversationId ?? "(not set)"}`);
-  console.log(
-    `  FOUNDRY_RESOURCE_OVERRIDE: ${args.foundryResourceOverride ?? "(not set)"}`,
-  );
-  console.log(
-    `  AGENT_AUTHENTICATION_IDENTITY_CLIENT_ID: ${args.authenticationIdentityClientId ?? "(not set)"}`,
-  );
-  console.log(`  AUDIO_INPUT_DEVICE: ${args.audioInputDevice ?? "(not set)"}`);
+  console.log(`  AZURE_VOICELIVE_ENDPOINT: ${args.endpoint}`);
+  console.log(`  AZURE_VOICELIVE_MODEL: ${args.model}`);
+  console.log(`  AZURE_VOICELIVE_VOICE: ${args.voice}`);
+  console.log(`  AUDIO_INPUT_DEVICE: ${args.audioInputDevice ?? '(not set)'}`);
   if (args.greetingText) {
     console.log(`  Proactive greeting: pre-defined`);
   } else {
     console.log(`  Proactive greeting: LLM-generated (default)`);
   }
   console.log(`  No audio mode: ${args.noAudio ? "enabled" : "disabled"}`);
+  console.log(
+    `  Authentication: ${args.useTokenCredential ? "DefaultAzureCredential" : "API Key"}`,
+  );
 
-  const credential = new DefaultAzureCredential();
-
-  const assistant = new BasicVoiceAssistant({
+  const assistant = new BasicModelVoiceAssistant({
     endpoint: args.endpoint,
     credential,
-    agentName: args.agentName,
-    projectName: args.projectName,
-    agentVersion: args.agentVersion,
-    conversationId: args.conversationId,
-    foundryResourceOverride: args.foundryResourceOverride,
-    authenticationIdentityClientId: args.authenticationIdentityClientId,
+    model: args.model,
+    voice: args.voice,
+    instructions: args.instructions,
     audioInputDevice: args.audioInputDevice,
     greetingText: args.greetingText,
     noAudio: args.noAudio,
@@ -707,14 +689,14 @@ async function main() {
   try {
     await assistant.start();
   } catch (err) {
-    if (err?.code === "ERR_USE_AFTER_CLOSE") return; // normal on Ctrl+C
+    if (err?.code === "ERR_USE_AFTER_CLOSE") return;
     console.error("Fatal error:", err);
     process.exit(1);
   }
 }
 
-console.log("🎙️  Basic Foundry Voice Agent with Azure VoiceLive SDK (Agent Mode)");
-console.log("=".repeat(65));
+console.log("🎙️  Basic Voice Assistant with Azure VoiceLive SDK (Model Mode)");
+console.log("=".repeat(60));
 main().then(
   () => console.log("\n👋 Voice assistant shut down. Goodbye!"),
   (err) => {

@@ -66,6 +66,7 @@ Python samples showcasing:
 ### [JavaScript Samples](./javascript/)
 JavaScript/TypeScript samples showcasing:
 - **Agents New Quickstart**: Node.js Voice Live + Foundry Agent v2 sample and agent-creation utility
+- **Model Quickstart**: Direct Voice Live model integration with proactive greetings
 - **Basic Web Voice Assistant**: Browser-based voice assistant with real-time streaming and barge-in support
 - **Voice Live Avatar**: Avatar-enabled voice conversations with Docker deployment
 - **Voice Live Car Demo**: Voice-Enabled Car Assistant powered by multiple architectures

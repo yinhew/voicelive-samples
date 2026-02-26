@@ -395,7 +395,7 @@ class BasicVoiceAssistant:
                             role="system",
                             content=[
                                 InputTextContentPart(
-                                    text="Say something to welcome the user."
+                                    text="Say something to welcome the user in English."
                                 )
                             ]
                         )

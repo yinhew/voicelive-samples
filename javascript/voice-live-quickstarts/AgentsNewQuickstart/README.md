@@ -42,6 +42,7 @@ This sample demonstrates the **Voice Live + Foundry Agent v2** flow using the Az
    # CONVERSATION_ID=
    # FOUNDRY_RESOURCE_OVERRIDE=
    # AGENT_AUTHENTICATION_IDENTITY_CLIENT_ID=
+   # AUDIO_INPUT_DEVICE=Microphone
    ```
 
 ## Step 1 – Create an agent
@@ -79,7 +80,7 @@ Expected output:
 ```
 🎙️  Basic Foundry Voice Agent with Azure VoiceLive SDK (Agent Mode)
 =================================================================
-Environment variables:
+Configuration:
   VOICELIVE_ENDPOINT: https://...
   ...
 [init] Connecting to VoiceLive with agent "my-voice-agent" for project "..." ...
@@ -97,6 +98,55 @@ The assistant will:
 3. Capture your microphone input and stream it to the agent.
 4. Play back the agent's audio responses in real-time.
 5. Support barge-in (interrupting the agent while it is speaking).
+
+### With explicit microphone device (Windows/SoX)
+
+```bash
+node voice-live-with-agent-v2.js --audio-input-device "Microphone (Yeti X)"
+```
+
+### List available audio input devices (Windows)
+
+```bash
+node voice-live-with-agent-v2.js --list-audio-devices
+```
+
+### Smoke test without local audio devices
+
+```bash
+node voice-live-with-agent-v2.js --no-audio
+```
+
+### Pre-defined greeting instead of LLM-generated
+
+```bash
+node voice-live-with-agent-v2.js --greeting-text "Welcome! How can I help?"
+```
+
+### Show all CLI options
+
+```bash
+node voice-live-with-agent-v2.js --help
+```
+
+## Command Line Options
+
+All settings can be provided via environment variables (`.env`) or CLI flags. CLI flags take precedence.
+
+| Flag | Description |
+|---|---|
+| `--endpoint` | VoiceLive endpoint URL |
+| `--agent-name` | Foundry agent name |
+| `--project-name` | Foundry project name |
+| `--agent-version` | Agent version |
+| `--conversation-id` | Resume a previous conversation |
+| `--foundry-resource` | Foundry resource override |
+| `--auth-client-id` | Authentication identity client ID |
+| `--audio-input-device` | Explicit SoX input device name (use when default device is not configured) |
+| `--list-audio-devices` | List available audio input devices on Windows and exit |
+| `--greeting-text` | Send a pre-defined greeting instead of LLM-generated |
+| `--no-audio` | Connect and configure session without mic/speaker (smoke test) |
+| `-h, --help` | Show help text |
 
 Conversation transcripts and session details are written to a timestamped file in the `logs/` subfolder.
 
