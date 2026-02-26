@@ -212,7 +212,7 @@ class BasicVoiceAssistant {
               type: "message",
               role: "system",
               content: [
-                { type: "input_text", text: "Say something to welcome the user." },
+                { type: "input_text", text: "Say something to welcome the user. Start the conversation in English." },
               ],
             });
             await session.sendEvent({ type: "response.create" });

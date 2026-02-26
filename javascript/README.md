@@ -16,6 +16,16 @@ A Node.js quickstart demonstrating the Voice Live + Foundry Agent v2 flow, inclu
 - Proactive greeting and barge-in handling
 - Conversation logging
 
+### [Model Quickstart](./voice-live-quickstarts/ModelQuickstart/)
+
+A Node.js quickstart demonstrating direct Voice Live model integration without Foundry agent orchestration.
+
+**Key Features:**
+- Direct model-mode session (`gpt-realtime` by default)
+- Custom instructions and voice configuration
+- API key or Azure credential authentication
+- Barge-in handling and conversation logging
+
 ### [Basic Web Voice Assistant](./basic-web-voice-assistant/)
 
 A browser-based voice assistant demonstrating Azure Voice Live SDK integration in a web application using TypeScript and the Web Audio API.
@@ -93,6 +103,7 @@ All samples require:
 | Sample | Requirements |
 |--------|--------------|
 | Agents New Quickstart | [Node.js 18+](https://nodejs.org/) with npm |
+| Model Quickstart | [Node.js 18+](https://nodejs.org/) with npm |
 | Basic Web Voice Assistant | [Node.js 18+](https://nodejs.org/) with npm |
 | Voice Live Avatar | [Docker](https://www.docker.com/get-started) |
 | Voice Live Car Demo | [Node.js 18+](https://nodejs.org/) with npm |
