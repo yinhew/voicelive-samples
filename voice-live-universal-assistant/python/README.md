@@ -69,9 +69,9 @@ pip install pytest
 python -m pytest tests/ -v
 ```
 
-## Known Issues
+## Notes
 
-No Python-specific SDK limitations at this time. All frontend features are supported.
+No Python-specific limitations at this time. All frontend features are supported.
 
 ## WebSocket Protocol
 

@@ -135,7 +135,7 @@ mvn spring-boot:run
 
 Open **http://localhost:8000** in your browser.
 
-> **Note:** See [java/KNOWN_ISSUES.md](java/KNOWN_ISSUES.md) for Java-specific ecosystem notes.
+> **Note:** See the Java backend [README](java/README.md#notes) for environment and ecosystem notes.
 
 ## Quick Start (JavaScript / Node.js)
 
@@ -223,7 +223,6 @@ voice-live-universal-assistant/
 ├── java/                      # Java backend (Spring Boot + Voice Live SDK)
 │   ├── src/                   # Spring Boot application source
 │   ├── pom.xml                # Maven config (azure-ai-voicelive 1.0.0-beta.5)
-│   ├── KNOWN_ISSUES.md        # SDK feature gaps and workarounds
 │   ├── .env.sample            # Environment variable template
 │   └── README.md              # Java-specific docs
 ├── javascript/                # JavaScript/Node.js backend (Express + Voice Live SDK)
@@ -236,8 +235,7 @@ voice-live-universal-assistant/
 │   ├── Program.cs             # ASP.NET Core minimal API + WebSocket middleware
 │   ├── VoiceLiveHandler.cs    # VoiceLiveHandler — SDK bridge
 │   ├── SessionConfig.cs       # Session configuration POCO
-│   ├── VoiceLiveWebApp.csproj # .NET project (Azure.AI.VoiceLive 1.1.0-beta.2)
-│   ├── KNOWN_ISSUES.md        # SDK feature gaps and workarounds
+│   ├── VoiceLiveWebApp.csproj # .NET project (Azure.AI.VoiceLive 1.1.0-beta.3)
 │   ├── .env.sample            # Environment variable template
 │   └── README.md              # C#-specific docs
 ├── infra/                     # Azure Bicep IaC
@@ -395,13 +393,13 @@ All backends pin the API version to `2026-01-01-preview` (the SDK defaults to GA
 | Backend | SDK | Version | Language-Specific Notes |
 |---------|-----|---------|------------------------|
 | Python  | `azure-ai-voicelive` | 1.0.0b1 | No known limitations |
-| Java    | `azure-ai-voicelive` | 1.0.0-beta.5 | `.env` loading via custom parser; Netty version mismatch warning — see [java/KNOWN_ISSUES.md](java/KNOWN_ISSUES.md) |
+| Java    | `azure-ai-voicelive` | 1.0.0-beta.5 | `.env` loaded via custom parser; Netty version mismatch warning (no runtime impact) |
 | JavaScript | `@azure/ai-voicelive` | 1.0.0-beta.3 | Node.js 20+ required. No known limitations |
-| C#      | `Azure.AI.VoiceLive` | 1.1.0-beta.2 | Interim response not supported (SDK gap) — see [csharp/KNOWN_ISSUES.md](csharp/KNOWN_ISSUES.md) |
+| C#      | `Azure.AI.VoiceLive` | 1.1.0-beta.3 | No known limitations |
 
 ### Frontend UX Guards
 
-- **Interim Response** is disabled (greyed out) when a realtime model is selected in model mode — it only works with agent mode or text models using cascaded pipelines (Azure Speech transcription). **Note:** The C# backend silently ignores this setting regardless — see [csharp/KNOWN_ISSUES.md](csharp/KNOWN_ISSUES.md).
+- **Interim Response** is disabled (greyed out) when a realtime model is selected in model mode — it only works with agent mode or text models using cascaded pipelines (Azure Speech transcription).
 - **Start Session** button is disabled when in agent mode and Agent Name or Project are empty, with a helper message directing the user to Settings.
 - **Transcription model** is auto-corrected to `azure-speech` when a text model is selected (cascaded pipelines only support `azure-speech`).
 

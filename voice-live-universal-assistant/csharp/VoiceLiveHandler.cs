@@ -258,21 +258,44 @@ public class VoiceLiveHandler
             options.InputAudioTranscription = transcription;
         }
 
+        // Interim response configuration
+        if (_config.InterimResponse)
+        {
+            if (_config.InterimResponseType == "static"
+                && !string.IsNullOrWhiteSpace(_config.InterimStaticTexts))
+            {
+                var staticConfig = new StaticInterimResponseConfig();
+                foreach (var text in _config.InterimStaticTexts.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    staticConfig.Texts.Add(text.Trim());
+                }
+                if (_config.InterimTriggerTool)
+                    staticConfig.Triggers.Add(InterimResponseTrigger.Tool);
+                if (_config.InterimTriggerLatency)
+                    staticConfig.Triggers.Add(InterimResponseTrigger.Latency);
+                if (_config.InterimLatencyMs > 0)
+                    staticConfig.LatencyThresholdMs = _config.InterimLatencyMs;
+                options.InterimResponse = BinaryData.FromObjectAsJson(staticConfig);
+            }
+            else
+            {
+                var llmConfig = new LlmInterimResponseConfig();
+                if (!string.IsNullOrWhiteSpace(_config.InterimInstructions))
+                    llmConfig.Instructions = _config.InterimInstructions;
+                if (_config.InterimTriggerTool)
+                    llmConfig.Triggers.Add(InterimResponseTrigger.Tool);
+                if (_config.InterimTriggerLatency)
+                    llmConfig.Triggers.Add(InterimResponseTrigger.Latency);
+                if (_config.InterimLatencyMs > 0)
+                    llmConfig.LatencyThresholdMs = _config.InterimLatencyMs;
+                options.InterimResponse = BinaryData.FromObjectAsJson(llmConfig);
+            }
+        }
+
         await session.ConfigureSessionAsync(options);
 
         _logger.LogInformation("[{ClientId}] Session configured ({Mode} mode, voice={Voice}, vad={Vad})",
             _clientId, _config.Mode, _config.Voice, _config.VadType);
-
-        // KNOWN ISSUE: Interim response is disabled in the C# backend.
-        // Azure.AI.VoiceLive 1.1.0-beta.2 does not expose InterimResponse on VoiceLiveSessionOptions,
-        // and SendCommandAsync with a session.update delta causes session corruption in cascaded/agent
-        // pipelines. The frontend setting is silently ignored until a future SDK version provides a
-        // strongly-typed InterimResponse property. See csharp/KNOWN_ISSUES.md.
-        if (_config.InterimResponse)
-        {
-            _logger.LogWarning("[{ClientId}] Interim response setting ignored — not supported in C# SDK 1.1.0-beta.2. See KNOWN_ISSUES.md.",
-                _clientId);
-        }
     }
 
     // ------------------------------------------------------------------

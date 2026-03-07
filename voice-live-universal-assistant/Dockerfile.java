@@ -6,7 +6,7 @@ WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm ci --ignore-scripts
 COPY frontend/ ./
-RUN npm run build
+RUN chmod +x node_modules/.bin/* && npm run build
 
 # Stage 2: Build Java backend
 FROM maven:3.9-eclipse-temurin-17 AS backend-build

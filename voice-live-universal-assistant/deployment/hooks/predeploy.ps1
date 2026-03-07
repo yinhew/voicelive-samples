@@ -7,6 +7,9 @@ param()
 
 $ErrorActionPreference = "Stop"
 
+# Prevent Azure CLI (colorama) from crashing on Unicode output (e.g., vite's ✓)
+$env:PYTHONUTF8 = "1"
+
 # Read azd env values
 $acrName = azd env get-value AZURE_CONTAINER_REGISTRY_NAME 2>$null
 $envName = azd env get-value AZURE_ENV_NAME 2>$null
@@ -52,7 +55,9 @@ if ($dockerRunning) {
     if ($LASTEXITCODE -ne 0) { throw "Docker push failed" }
 } else {
     Write-Host "Using ACR cloud build (no local Docker required)..."
-    az acr build --registry $acrName --image "voicelive-web:${envName}-${timestamp}" --file $dockerfile . 2>&1
+    # --no-logs: skip real-time log streaming to avoid Azure CLI colorama
+    # crash on Unicode output (vite's ✓) on Windows (cp1252).
+    az acr build --registry $acrName --image "voicelive-web:${envName}-${timestamp}" --file $dockerfile . --no-logs 2>&1
     if ($LASTEXITCODE -ne 0) { throw "ACR cloud build failed" }
 }
 

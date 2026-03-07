@@ -263,32 +263,25 @@ class BasicVoiceAssistant : IDisposable
     {
         Console.WriteLine("Setting up voice conversation session...");
 
-        // Create session configuration and send update
-        await _session!.ConfigureSessionAsync(new VoiceLiveSessionOptions
+        // Create session configuration with interim response to bridge latency gaps
+        var interimConfig = new LlmInterimResponseConfig
+        {
+            Instructions = "Create friendly interim responses indicating wait time due to "
+                + "ongoing processing, if any. Do not include in all responses! Do not "
+                + "say you don't have real-time access to information when calling tools!",
+        };
+        interimConfig.Triggers.Add(InterimResponseTrigger.Tool);
+        interimConfig.Triggers.Add(InterimResponseTrigger.Latency);
+
+        var options = new VoiceLiveSessionOptions
         {
             InputAudioFormat = InputAudioFormat.Pcm16,
-            OutputAudioFormat = OutputAudioFormat.Pcm16
-        }, cancellationToken).ConfigureAwait(false);
+            OutputAudioFormat = OutputAudioFormat.Pcm16,
+            InterimResponse = BinaryData.FromObjectAsJson(interimConfig)
+        };
 
-        // Configure interim responses to bridge latency gaps during processing.
-        // Sent as a raw session.update command because the interim_response property
-        // is not yet exposed on VoiceLiveSessionOptions in this SDK version.
-        await _session!.SendCommandAsync(
-            BinaryData.FromObjectAsJson(new
-            {
-                type = "session.update",
-                session = new
-                {
-                    interim_response = new
-                    {
-                        type = "llm_interim_response",
-                        instructions = "Create friendly interim responses indicating wait time due to "
-                            + "ongoing processing, if any. Do not include in all responses! Do not "
-                            + "say you don't have real-time access to information when calling tools!",
-                        triggers = new[] { "tool", "latency" }
-                    }
-                }
-            }), cancellationToken).ConfigureAwait(false);
+        // Send session configuration
+        await _session!.ConfigureSessionAsync(options, cancellationToken).ConfigureAwait(false);
 
         Console.WriteLine("Session configuration sent");
     }

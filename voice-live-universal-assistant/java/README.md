@@ -56,9 +56,10 @@ Identical to the Python backend:
 | `GET /config` | Server configuration (mode, model, voice, etc.) |
 | `GET /languages` | Available STT locales |
 
-## Known Issues
+## Notes
 
-See [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for Java-specific SDK and ecosystem limitations.
+- **`.env` loading:** Java lacks a built-in dotenv library. The `Application.loadDotEnv()` method parses `.env` files and sets values as system properties (not environment variables). For production deployments, set environment variables directly.
+- **Netty version warning:** Spring Boot 3.3.6 bundles Netty 4.1.115.Final while the Azure SDK expects 4.1.130.Final. This produces a startup warning but has no runtime impact.
 
 ## Connection Modes
 

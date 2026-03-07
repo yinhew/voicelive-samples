@@ -120,6 +120,6 @@ npm run dev
 
 The server serves the built frontend from `./static/` or `../frontend/dist/`.
 
-## Known Issues
+## Notes
 
-No JavaScript-specific SDK limitations at this time. All frontend features are supported.
+No JavaScript-specific limitations at this time. All frontend features are supported.
