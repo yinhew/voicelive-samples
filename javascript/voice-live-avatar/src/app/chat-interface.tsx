@@ -46,11 +46,11 @@ import {
   RequestSession,
   FunctionCallOutputItem,
   ResponseMCPApprovalRequestItem,
-  ResponseFoundryAgentCallItem,
-  ServerEventResponseFoundryAgentCallArgumentsDone,
-  ServerEventResponseFoundryAgentCallInProgress,
   KnownServerEventType,
   SystemMessageItem,
+  AgentSessionConfig,
+  InterimResponseConfig,
+  InterimResponseTrigger,
 } from "@azure/ai-voicelive";
 import { AzureKeyCredential, TokenCredential } from "@azure/core-auth";
 import { SearchClient } from "@azure/search-documents";
@@ -148,6 +148,31 @@ interface FoundryAgentToolConfig {
   projectName: string;
   description?: string;
   clientId?: string;
+}
+
+/** Minimal local type for foundry agent call items (SDK removed these types in beta.3) */
+interface FoundryAgentCallItem {
+  type: "foundry_agent_call";
+  id?: string;
+  name?: string;
+  output?: string;
+  arguments?: string;
+}
+
+/** Minimal local type for foundry agent call events */
+interface FoundryAgentCallEvent {
+  type: string;
+  item_id?: string;
+  arguments?: string;
+  agent_response_id?: string;
+}
+
+function isFoundryAgentCallItem(item: unknown): item is FoundryAgentCallItem {
+  return typeof item === "object" && item !== null && (item as Record<string, unknown>).type === "foundry_agent_call";
+}
+
+function isFoundryAgentCallEvent(event: unknown, eventType: string): event is FoundryAgentCallEvent {
+  return typeof event === "object" && event !== null && (event as Record<string, unknown>).type === eventType;
 }
 
 interface AudioChunksForPA {
@@ -294,7 +319,7 @@ const readme = `
         - The resource must be in the \`eastus2\` or \`swedencentral\` region. Other regions are not supported.
 
     2. **(Optional) Set the Agent**
-        - Set the project name and agent ID to connect to a specific agent.
+        - Set the project name and agent name to connect to a specific agent.
         - Entra ID auth is required for agent mode, use \`az account get-access-token --resource https://ai.azure.com --query accessToken -o tsv\` to get the token.
 
     2. **Select noise suppression or echo cancellation**
@@ -313,7 +338,7 @@ const readme = `
         - Click on the mic button to start recording audio. Click again to stop recording.
 `;
 
-let default_instructions_for_agent = 
+let default_instructions_for_agent =
 `You are a helpful agent. Your task is to maintain a natural conversation flow with the user, help them resolve their query in a way that's helpful, efficient, and correct, and to defer heavily to a more experienced and intelligent Foundry Agent.
 
 # General Instructions
@@ -458,6 +483,12 @@ const availableVoices = [
   { id: "mt-MT-JosephNeural", name: "Joseph (Maltese)" },
   { id: "zh-cn-xiaoxiao2:DragonHDFlashLatestNeural", name: "Xiaoxiao2 HDFlash" },
   { id: "zh-cn-yunyi:DragonHDFlashLatestNeural", name: "Yunyi HDFlash" },
+  { id: "zh-cn-xiaoxiao:DragonHDFlashLatestNeural", name: "Xiaoxiao HDFlash" },
+  { id: "zh-cn-yunxiao:DragonHDFlashLatestNeural", name: "Yunxiao HDFlash" },
+  { id: "zh-cn-xiaochen:DragonHDFlashLatestNeural", name: "Xiaochen HDFlash" },
+  { id: "zh-cn-yunhan:DragonHDFlashLatestNeural", name: "Yunhan HDFlash" },
+  { id: "zh-cn-xiaoyi:DragonHDFlashLatestNeural", name: "Xiaoyi HDFlash" },
+  { id: "zh-cn-yunxia:DragonHDFlashLatestNeural", name: "Yunxia HDFlash" },
   {
     id: "alloy",
     name: "Alloy (OpenAI)",
@@ -549,6 +580,7 @@ const ChatInterface = () => {
   const [apiKey, setApiKey] = useState("");
   const [endpoint, setEndpoint] = useState("");
   const [entraToken, setEntraToken] = useState("");
+  const [authType, setAuthType] = useState<"apiKey" | "entraToken">("apiKey");
   const credentialRef = useRef<AzureKeyCredential | TokenCredential | null>(null);
   const [model, setModel] = useState("gpt-realtime");
   const [searchEndpoint, setSearchEndpoint] = useState("");
@@ -558,7 +590,7 @@ const ChatInterface = () => {
   const [searchIdentifierField, setSearchIdentifierField] =
     useState("chunk_id");
   const [recognitionLanguage, setRecognitionLanguage] = useState("auto");
-  const [srModel, setSrModel] = useState<"azure-speech" | "mai-ears-1">("azure-speech");
+  const [srModel, setSrModel] = useState<"azure-speech" | "mai-transcribe-1" | "gpt-4o-transcribe" | "gpt-4o-mini-transcribe" | "gpt-4o-transcribe-diarize">("azure-speech");
   const [phraseList, setPhraseList] = useState<string[]>([]);
   const [customSpeechModels, setCustomSpeechModels] = useState<Record<string, string>>({});
   const [useNS, setUseNS] = useState(false);
@@ -618,7 +650,7 @@ const ChatInterface = () => {
   const [sceneRotationX, setSceneRotationX] = useState(0.0);
   const [sceneRotationY, setSceneRotationY] = useState(0.0);
   const [sceneRotationZ, setSceneRotationZ] = useState(0.0);
-  const [sceneAmplitude, setSceneAmplitude] = useState(100.0);
+  const [sceneAmplitude, setSceneAmplitude] = useState(60.0);
   const [isDevelop, setIsDevelop] = useState(false);
   const [enableSearch, setEnableSearch] = useState(false);
   const [enablePA, setEnablePA] = useState(false);
@@ -639,12 +671,25 @@ const ChatInterface = () => {
   const startRecordingTimestamp = useRef<number | null>(null);
 
   // Add mode state and agent fields
-  const [mode, setMode] = useState<"model" | "agent" | "agent-v2">("model");
+  const [mode, setMode] = useState<"model" | "agent">("model");
   const [agentProjectName, setAgentProjectName] = useState("");
-  const [agentId, setAgentId] = useState("");
   const [agentName, setAgentName] = useState("");
-  const [agents, setAgents] = useState<{ id: string; name: string }[]>([]);
+  const [agentVersion, setAgentVersion] = useState("");
+  const [agents, setAgents] = useState<{ name: string; version: string }[]>([]);
   const [isMobile, setIsMobile] = useState(false);
+  const [profile, setProfile] = useState<string | null>(null);
+
+  // Interim response configuration
+  const [interimResponseEnabled, setInterimResponseEnabled] = useState(false);
+  const [interimResponseType, setInterimResponseType] = useState<"static_interim_response" | "llm_interim_response">("static_interim_response");
+  const [interimResponseTriggers, setInterimResponseTriggers] = useState<InterimResponseTrigger[]>(["latency"]);
+  const [interimResponseLatencyThreshold, setInterimResponseLatencyThreshold] = useState(500);
+  // Static interim response fields
+  const [interimResponseTexts, setInterimResponseTexts] = useState<string>("Let me think about that...\nOne moment please...\nGood question, let me check...");
+  // LLM interim response fields
+  const [interimResponseModel, setInterimResponseModel] = useState("gpt-4.1-mini");
+  const [interimResponseInstructions, setInterimResponseInstructions] = useState("");
+  const [interimResponseMaxTokens, setInterimResponseMaxTokens] = useState(50);
 
   const clientRef = useRef<VoiceLiveClient | null>(null);
   const sessionRef = useRef<VoiceLiveSession | null>(null);
@@ -690,6 +735,15 @@ const ChatInterface = () => {
     }
   }, [foundryAgentTools]);
 
+  // Read profile query parameter from URL
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const profileParam = params.get("profile");
+    if (profileParam) {
+      setProfile(profileParam);
+    }
+  }, []);
+
   // Fetch configuration from /config endpoint when component loads
   useEffect(() => {
     const fetchConfig = async () => {
@@ -713,12 +767,12 @@ const ChatInterface = () => {
         // Parse agent configs from /config
         if (config.agent && config.agent.project_name) {
           setAgentProjectName(config.agent.project_name);
-          if (Array.isArray(config.agent.agents)) {
-            setAgents(config.agent.agents);
-            // If only one agent, auto-select it
-            if (config.agent.agents.length === 1) {
-              setAgentId(config.agent.agents[0].id);
-            }
+        }
+        if (config.agent && Array.isArray(config.agent.agents)) {
+          setAgents(config.agent.agents);
+          if (config.agent.agents.length > 0 && !agentName) {
+            setAgentName(config.agent.agents[0].name);
+            setAgentVersion(config.agent.agents[0].version);
           }
         }
         setConfigLoaded(true);
@@ -897,7 +951,7 @@ const ChatInterface = () => {
       // Handle function call arguments done
       onResponseFunctionCallArgumentsDone: async (event, _context) => {
         console.log("Function call:", event.name, event.arguments);
-        
+
         if (event.name === "get_time") {
           const formattedTime = new Date().toLocaleString("en-US", {
             weekday: "long",
@@ -930,7 +984,7 @@ const ChatInterface = () => {
             });
             let resultText = "";
             for await (const result of searchResults.results) {
-               
+
               const document = result.document as any;
               resultText += `[${document[searchIdentifierField]}]: ${document[searchContentField]}\n-----\n`;
             }
@@ -975,8 +1029,8 @@ const ChatInterface = () => {
             },
           ]);
         }
-        else if (event.item && event.item.type === "foundry_agent_call") {
-          const foundryCallItem = event.item as ResponseFoundryAgentCallItem;
+        else if (event.item && isFoundryAgentCallItem(event.item)) {
+          const foundryCallItem = event.item;
           const messageId = foundryCallItem.id || Date.now().toString();
           setMessages((prev) => [
             ...prev,
@@ -993,8 +1047,8 @@ const ChatInterface = () => {
       },
 
       onResponseOutputItemDone: async (event, _context) => {
-        if (event.item && event.item.type === "foundry_agent_call") {
-          const foundryCallItem = event.item as ResponseFoundryAgentCallItem;
+        if (event.item && isFoundryAgentCallItem(event.item)) {
+          const foundryCallItem = event.item;
           const messageId = foundryCallItem.id;
           if (messageId) {
             setMessages((prev) =>
@@ -1016,7 +1070,7 @@ const ChatInterface = () => {
 
       // Handle all server events as catch-all for video and MCP
       onServerEvent: async (event, _context) => {
-         
+
         const anyEvent = event as any;
         // Note: response.video.delta is handled via monkey-patch in session setup
         // because the SDK's message parser drops unknown event types
@@ -1028,9 +1082,9 @@ const ChatInterface = () => {
         }
 
         // Handle Foundry Agent call arguments done
-        if (anyEvent.type === KnownServerEventType.ResponseFoundryAgentCallArgumentsDone) {
-          const foundryCallArgsEvent = event as ServerEventResponseFoundryAgentCallArgumentsDone;
-          const messageId = foundryCallArgsEvent.itemId;
+        if (isFoundryAgentCallEvent(anyEvent, "response.foundry_agent_call.arguments_done")) {
+          const foundryCallArgsEvent = anyEvent;
+          const messageId = foundryCallArgsEvent.item_id;
           if (messageId) {
             setMessages((prev) =>
               prev.map((m) =>
@@ -1049,10 +1103,10 @@ const ChatInterface = () => {
         }
 
         // Handle Foundry Agent call in progress
-        if (anyEvent.type === KnownServerEventType.ResponseFoundryAgentCallInProgress) {
-          const foundryCallInProgressEvent = event as ServerEventResponseFoundryAgentCallInProgress;
-          const messageId = foundryCallInProgressEvent.itemId;
-          if (messageId && foundryCallInProgressEvent.agentResponseId) {
+        if (isFoundryAgentCallEvent(anyEvent, "response.foundry_agent_call.in_progress")) {
+          const foundryCallInProgressEvent = anyEvent;
+          const messageId = foundryCallInProgressEvent.item_id;
+          if (messageId && foundryCallInProgressEvent.agent_response_id) {
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === messageId && m.foundryAgent
@@ -1060,7 +1114,7 @@ const ChatInterface = () => {
                       ...m,
                       foundryAgent: {
                         ...m.foundryAgent,
-                        agentResponseId: foundryCallInProgressEvent.agentResponseId,
+                        agentResponseId: foundryCallInProgressEvent.agent_response_id,
                       },
                     }
                   : m
@@ -1106,17 +1160,7 @@ const ChatInterface = () => {
             }
           : new AzureKeyCredential(apiKey);
 
-        if (mode === "agent" && (!agentId || !agentProjectName)) {
-          setMessages((prevMessages) => [
-            ...prevMessages,
-            {
-              type: "error",
-              content: "Please input/select an agent and project name.",
-            },
-          ]);
-          return;
-        }
-        if (mode === "agent-v2" && (!agentName || !agentProjectName)) {
+        if (mode === "agent" && (!agentName || !agentProjectName)) {
           setMessages((prevMessages) => [
             ...prevMessages,
             {
@@ -1127,50 +1171,32 @@ const ChatInterface = () => {
           return;
         }
 
-        // Determine endpoint and model based on mode
-        let sessionEndpoint = endpoint;
-        let sessionModel: string;
-        try {
-          if (mode === "agent") {
-            // For agent mode, use placeholder model (server uses query params for agent routing)
-            sessionModel = "agent";
-            const url = new URL(sessionEndpoint);
-            url.searchParams.set("agent-id", agentId);
-            url.searchParams.set("agent-project-name", agentProjectName);
-            sessionEndpoint = url.toString();
-          } else if (mode === "agent-v2") {
-            // For agent-v2 mode, use placeholder model (server uses query params for agent routing)
-            sessionModel = "agent-v2";
-            const url = new URL(sessionEndpoint);
-            url.searchParams.set("agent-name", agentName);
-            url.searchParams.set("agent-project-name", agentProjectName);
-            sessionEndpoint = url.toString();
-          } else {
-            sessionModel = model;
-          }
-        } catch (error) {
-          console.error("Invalid endpoint URL:", error);
-          setMessages((prevMessages) => [
-            ...prevMessages,
-            {
-              type: "error",
-              content: "Invalid endpoint URL. Please check the endpoint format.",
-            },
-          ]);
-          return;
-        }
-
         // Create VoiceLiveClient with apiVersion option
-        clientRef.current = new VoiceLiveClient(sessionEndpoint, credentialRef.current!, {
+        // Build effective endpoint with query parameters
+        const endpointUrl = new URL(endpoint);
+        endpointUrl.searchParams.set("debug", "on");
+        if (profile) {
+          endpointUrl.searchParams.set("profile", profile);
+        }
+        clientRef.current = new VoiceLiveClient(endpointUrl.toString(), credentialRef.current!, {
           apiVersion: "2026-01-01-preview",
         });
 
-        // Start session with the model
-        sessionRef.current = await clientRef.current.startSession(sessionModel);
-        
+        // Start session with model or agent SessionTarget
+        if (mode === "agent") {
+          const agentConfig: AgentSessionConfig = {
+            agentName: agentName,
+            projectName: agentProjectName,
+            agentVersion: agentVersion || undefined,
+          };
+          sessionRef.current = await clientRef.current.startSession({ agent: agentConfig });
+        } else {
+          sessionRef.current = await clientRef.current.startSession(model);
+        }
+
         // Monkey-patch the session to intercept raw messages for response.video.delta
         // The SDK's message parser drops unknown event types like response.video.delta
-         
+
         const session = sessionRef.current as any;
         if (session._handleIncomingMessage) {
           const originalHandler = session._handleIncomingMessage.bind(session);
@@ -1196,12 +1222,12 @@ const ChatInterface = () => {
 
         // Start event subscription immediately after session is created to catch all events
         setupEventSubscription();
-        
+
         console.log("Session created, sessionId:", sessionRef.current.sessionId);
         const modalities: Modality[] = ["text", "audio"];
-        
+
         // Build turn detection config
-         
+
         const turnDetectionConfig: any = turnDetectionType ? { ...turnDetectionType } : undefined;
         if (
           turnDetectionConfig &&
@@ -1215,9 +1241,9 @@ const ChatInterface = () => {
         if (turnDetectionConfig?.type === "azure_semantic_vad") {
           turnDetectionConfig.removeFillerWords = removeFillerWords;
         }
-        
+
         // Build voice config for the new SDK
-         
+
         const voiceConfig: any = voiceType === "custom"
           ? {
               name: customVoiceName,
@@ -1235,7 +1261,7 @@ const ChatInterface = () => {
                 temperature: voiceTemperature,
                 model: personalVoiceModel,
               }
-            : voiceName.includes("-")
+            : (voiceName.includes("-") || voiceName.includes(":"))
               ? {
                   name: voiceName,
                   type: "azure-standard",
@@ -1245,7 +1271,7 @@ const ChatInterface = () => {
                   rate: voiceSpeed.toString(),
                 }
               : { name: voiceName, type: "openai" };
-              
+
         if (enableSearch) {
           searchClientRef.current = new SearchClient(
             searchEndpoint,
@@ -1257,10 +1283,10 @@ const ChatInterface = () => {
         const effectiveInstructions = foundryAgentTools.length > 0 && (!instructions || instructions.length === 0)
           ? defaultFoundryInstructions
           : instructions;
-          
+
         // Get avatar config before updating session
         const avatarConfig = getAvatarConfig();
-        
+
         // Build tools array - only include if there are actual tools
         const allTools = [
           ...(tools || []),
@@ -1280,17 +1306,15 @@ const ChatInterface = () => {
             clientId: tool.clientId || undefined,
           })),
         ];
-        
+
         // Update session configuration using the new SDK pattern
         await sessionRef.current!.updateSession({
           instructions: effectiveInstructions?.length > 0 ? effectiveInstructions : undefined,
           inputAudioTranscription: {
-            model: mode === "model" && model.includes("gpt") && model.includes("realtime")
-              ? "whisper-1"
-              : srModel,
-            // Language cannot be configured for mai-ears-1 model
+            model: srModel,
+            // Language cannot be configured for mai-transcribe-1 model
             language:
-              srModel === "mai-ears-1" ? undefined : (recognitionLanguage === "auto" ? undefined : recognitionLanguage),
+              srModel === "mai-transcribe-1" ? undefined : (recognitionLanguage === "auto" ? undefined : recognitionLanguage),
             phraseList: phraseList.length > 0 ? phraseList : undefined,
             customSpeech: Object.keys(customSpeechModels).length > 0 ? customSpeechModels : undefined,
           },
@@ -1298,8 +1322,8 @@ const ChatInterface = () => {
           voice: voiceConfig,
           avatar: avatarConfig,
           tools: allTools.length > 0 ? allTools : undefined,
-          // Temperature is not supported in agent-v2 mode (configured in agent definition)
-          temperature: mode === "agent-v2" ? undefined : temperature,
+          // Temperature is not supported in agent mode (configured in agent definition)
+          temperature: mode === "agent" ? undefined : temperature,
           modalities,
           inputAudioNoiseReduction: useNS
             ? {
@@ -1311,6 +1335,7 @@ const ChatInterface = () => {
                 type: "server_echo_cancellation" as const,
               }
             : undefined,
+          interimResponse: interimResponseEnabled ? buildInterimResponseConfig() : undefined,
         });
 
         // For photo avatar, send an additional session.update with scene config
@@ -1349,11 +1374,11 @@ const ChatInterface = () => {
                 console.log("ICE servers timeout, proceeding without ICE servers");
                 resolve(undefined);
               }, 5000);
-              
+
               const tempSub = sessionRef.current!.subscribe({
                 onSessionUpdated: async (event) => {
                   clearTimeout(timeout);
-                   
+
                   const avatarInfo = (event.session as any)?.avatar;
                   if (avatarInfo?.iceServers) {
                     console.log("Received ICE servers from session.updated:", avatarInfo.iceServers);
@@ -1366,7 +1391,7 @@ const ChatInterface = () => {
                 },
               });
             });
-            
+
             const iceServers = await iceServersPromise;
             await getLocalDescription(iceServers);
           } else {
@@ -1462,22 +1487,48 @@ const ChatInterface = () => {
     }
   };
 
-   
+  const buildInterimResponseConfig = (): InterimResponseConfig => {
+    const base = {
+      triggers: interimResponseTriggers,
+      latencyThresholdInMs: interimResponseLatencyThreshold,
+    };
+    if (interimResponseType === "static_interim_response") {
+      return {
+        ...base,
+        type: "static_interim_response" as const,
+        texts: interimResponseTexts.split("\n").map(t => t.trim()).filter(t => t.length > 0),
+      };
+    } else {
+      return {
+        ...base,
+        type: "llm_interim_response" as const,
+        model: interimResponseModel || undefined,
+        instructions: interimResponseInstructions || undefined,
+        maxCompletionTokens: interimResponseMaxTokens || undefined,
+      };
+    }
+  };
+
   const getAvatarConfig = (): any => {
     if (!isAvatar) {
       return undefined;
     }
 
     // Build video params - only include background if URL is provided
-     
+
     const videoParams: any = {
       codec: "h264",
+      resolution: {
+        width: 1920,
+        height: 1080,
+      },
       crop: {
         topLeft: [560, 0],
         bottomRight: [1360, 1080],
       },
+      bitrate: isPhotoAvatar ? 500000 : 1000000,
     };
-    
+
     // Only add background if URL is provided (avoid undefined values)
     if (avatarBackgroundImageUrl) {
       videoParams.background = {
@@ -1547,13 +1598,13 @@ const ChatInterface = () => {
 
   // Helper function to send raw JSON through the SDK's internal connection manager
   // This bypasses the SDK's serializer which strips unknown properties like 'scene'
-   
+
   const sendRawEvent = async (event: any): Promise<void> => {
     if (!sessionRef.current) {
       throw new Error("Session not connected");
     }
     // Access the internal connection manager to send raw JSON
-     
+
     const session = sessionRef.current as any;
     if (session._connectionManager?.send) {
       const serialized = JSON.stringify(event);
@@ -1633,7 +1684,7 @@ const ChatInterface = () => {
       await subscriptionRef.current.close();
       subscriptionRef.current = null;
     }
-    
+
     // Disconnect the session
     if (sessionRef.current) {
       try {
@@ -1643,7 +1694,7 @@ const ChatInterface = () => {
         console.error("Error disconnecting session:", error);
       }
     }
-    
+
     // Clear the client reference (VoiceLiveClient doesn't need explicit dispose)
     if (clientRef.current) {
       try {
@@ -1701,7 +1752,7 @@ const ChatInterface = () => {
         type: "mcp_approval_response",
         approve: approve,
         approvalRequestId: message.mcpApproval.approvalRequestId,
-       
+
       } as any);
 
       // Mark the message as handled
@@ -1747,7 +1798,7 @@ const ChatInterface = () => {
         ]);
         referenceText.current = temporaryStorageMessage;
 
-         
+
         await sessionRef.current.addConversationItem({
           type: "message",
           role: "user",
@@ -1761,7 +1812,7 @@ const ChatInterface = () => {
   };
 
   const startPAWithStream = async (): Promise<string> => {
-     
+
     return new Promise((resolve, _) => {
       if (!audioChunksForPA.current || audioChunksForPA.current.length === 0) {
         console.log("No audio chunks available for pronunciation assessment.");
@@ -1830,7 +1881,7 @@ const ChatInterface = () => {
         );
       };
 
-       
+
       reco.sessionStopped = function (_s, _e) {
         reco.stopContinuousRecognitionAsync();
         reco.close();
@@ -2350,8 +2401,8 @@ const ChatInterface = () => {
   };
 
   // Returns true if agent mode is enabled or a cascaded model is selected
-  function isCascaded(mode: "model" | "agent" | "agent-v2", model: string): boolean {
-    if (mode === "agent" || mode === "agent-v2") return true;
+  function isCascaded(mode: "model" | "agent", model: string): boolean {
+    if (mode === "agent") return true;
     // Add all cascaded model names here
     const cascadedModels = [
       "gpt-4o",
@@ -2359,6 +2410,16 @@ const ChatInterface = () => {
       "gpt-4.1",
       "gpt-4.1-mini",
       "gpt-4.1-nano",
+      "gpt-5",
+      "gpt-5-mini",
+      "gpt-5-nano",
+      "gpt-5-chat",
+      "gpt-5.1",
+      "gpt-5.1-chat",
+      "gpt-5.2",
+      "gpt-5.2-chat",
+      "gpt-5.3-chat",
+      "gpt-5.4",
       "phi4-mini",
     ];
     return cascadedModels.includes(model);
@@ -2447,7 +2508,7 @@ const ChatInterface = () => {
                   <label className="text-sm font-medium">Mode</label>
                   <Select
                     value={mode}
-                    onValueChange={(v) => setMode(v as "model" | "agent" | "agent-v2")}
+                    onValueChange={(v) => setMode(v as "model" | "agent")}
                     disabled={isConnected}
                   >
                     <SelectTrigger>
@@ -2456,7 +2517,6 @@ const ChatInterface = () => {
                     <SelectContent>
                       <SelectItem value="model">Model</SelectItem>
                       <SelectItem value="agent">Agent</SelectItem>
-                      <SelectItem value="agent-v2">Agent V2</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -2467,16 +2527,43 @@ const ChatInterface = () => {
                   onChange={(e) => setEndpoint(e.target.value)}
                   disabled={isConnected || configLoaded}
                 />
-                {(!configLoaded && mode === "model") && (
-                  <Input
-                    type="password"
-                    placeholder="Subscription Key"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    disabled={isConnected}
-                  />
+                {!configLoaded && (
+                  <>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Authentication</label>
+                      <Select
+                        value={mode === "agent" ? "entraToken" : authType}
+                        onValueChange={(v) => setAuthType(v as "apiKey" | "entraToken")}
+                        disabled={isConnected || mode === "agent"}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="apiKey">API Key</SelectItem>
+                          <SelectItem value="entraToken">Entra ID Token</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    {(mode === "agent" || authType === "entraToken") ? (
+                      <Input
+                        placeholder="Entra Token"
+                        value={entraToken}
+                        onChange={(e) => setEntraToken(e.target.value)}
+                        disabled={isConnected}
+                      />
+                    ) : (
+                      <Input
+                        type="password"
+                        placeholder="Subscription Key"
+                        value={apiKey}
+                        onChange={(e) => setApiKey(e.target.value)}
+                        disabled={isConnected}
+                      />
+                    )}
+                  </>
                 )}
-                {(mode === "agent" || mode === "agent-v2") && (
+                {configLoaded && mode === "agent" && (
                   <Input
                     placeholder="Entra Token"
                     value={entraToken}
@@ -2485,7 +2572,6 @@ const ChatInterface = () => {
                   />
                 )}
 
-                {/* Entra token input */}
                 {/* Show agent fields if agent mode */}
                 {mode === "agent" ? (
                   <>
@@ -2498,50 +2584,35 @@ const ChatInterface = () => {
                       onChange={(e) => setAgentProjectName(e.target.value)}
                       disabled={isConnected}
                     />
-                    {/* Agent ID as Select if agents available, else Input */}
                     {agents.length > 0 ? (
                       <Select
-                        value={agentId}
-                        onValueChange={setAgentId}
+                        value={`${agentName}:${agentVersion}`}
+                        onValueChange={(value) => {
+                          const [name, ...versionParts] = value.split(":");
+                          setAgentName(name);
+                          setAgentVersion(versionParts.join(":"));
+                        }}
                         disabled={isConnected}
                       >
                         <SelectTrigger>
-                          <SelectValue placeholder="Select Agent" />
+                          <SelectValue placeholder="Select an agent" />
                         </SelectTrigger>
                         <SelectContent>
                           {agents.map((agent) => (
-                            <SelectItem key={agent.id} value={agent.id}>
-                              {agent.name || agent.id}
+                            <SelectItem key={`${agent.name}:${agent.version}`} value={`${agent.name}:${agent.version}`}>
+                              {agent.name} (v{agent.version})
                             </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
                     ) : (
                       <Input
-                        placeholder="Agent ID"
-                        value={agentId}
-                        onChange={(e) => setAgentId(e.target.value)}
+                        placeholder="Agent Name"
+                        value={agentName}
+                        onChange={(e) => setAgentName(e.target.value)}
                         disabled={isConnected}
                       />
                     )}
-                  </>
-                ) : mode === "agent-v2" ? (
-                  <>
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium">Agent V2</label>
-                    </div>
-                    <Input
-                      placeholder="Agent Project Name"
-                      value={agentProjectName}
-                      onChange={(e) => setAgentProjectName(e.target.value)}
-                      disabled={isConnected}
-                    />
-                    <Input
-                      placeholder="Agent Name"
-                      value={agentName}
-                      onChange={(e) => setAgentName(e.target.value)}
-                      disabled={isConnected}
-                    />
                   </>
                 ) : (
                   <>
@@ -2556,11 +2627,44 @@ const ChatInterface = () => {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
+                          <SelectItem value="gpt-realtime-1.5">
+                            GPT Realtime 1.5
+                          </SelectItem>
                           <SelectItem value="gpt-realtime">
                             GPT Realtime
                           </SelectItem>
                           <SelectItem value="gpt-realtime-mini">
                             GPT Realtime Mini
+                          </SelectItem>
+                          <SelectItem value="gpt-5.4">
+                            GPT-5.4 (Cascaded)
+                          </SelectItem>
+                          <SelectItem value="gpt-5.3-chat">
+                            GPT-5.3 Chat (Cascaded)
+                          </SelectItem>
+                          <SelectItem value="gpt-5.2">
+                            GPT-5.2 (Cascaded)
+                          </SelectItem>
+                          <SelectItem value="gpt-5.2-chat">
+                            GPT-5.2 Chat (Cascaded)
+                          </SelectItem>
+                          <SelectItem value="gpt-5.1">
+                            GPT-5.1 (Cascaded)
+                          </SelectItem>
+                          <SelectItem value="gpt-5.1-chat">
+                            GPT-5.1 Chat (Cascaded)
+                          </SelectItem>
+                          <SelectItem value="gpt-5">
+                            GPT-5 (Cascaded)
+                          </SelectItem>
+                          <SelectItem value="gpt-5-mini">
+                            GPT-5 Mini (Cascaded)
+                          </SelectItem>
+                          <SelectItem value="gpt-5-nano">
+                            GPT-5 Nano (Cascaded)
+                          </SelectItem>
+                          <SelectItem value="gpt-5-chat">
+                            GPT-5 Chat (Cascaded)
                           </SelectItem>
                           <SelectItem value="gpt-4.1">
                             GPT-4.1 (Cascaded)
@@ -2629,29 +2733,34 @@ const ChatInterface = () => {
                 )}
 
                 {/* Speech Recognition Model selection - only show if cascaded/agent */}
-                {isCascaded(mode, model) && (
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">
-                      Speech Recognition Model
-                    </label>
-                    <Select
-                      value={srModel}
-                      onValueChange={(value) => setSrModel(value as "azure-speech" | "mai-ears-1")}
-                      disabled={isConnected}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="azure-speech">Azure Speech</SelectItem>
-                        <SelectItem value="mai-ears-1">MAI Ears 1</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">
+                    Speech Recognition Model
+                  </label>
+                  <Select
+                    value={srModel}
+                    onValueChange={(value) => setSrModel(value as typeof srModel)}
+                    disabled={isConnected}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="azure-speech">Azure Speech</SelectItem>
+                      <SelectItem value="mai-transcribe-1">MAI Transcribe 1</SelectItem>
+                      {!isCascaded(mode, model) && (
+                        <>
+                          <SelectItem value="gpt-4o-transcribe">GPT-4o Transcribe</SelectItem>
+                          <SelectItem value="gpt-4o-mini-transcribe">GPT-4o Mini Transcribe</SelectItem>
+                          <SelectItem value="gpt-4o-transcribe-diarize">GPT-4o Transcribe Diarize</SelectItem>
+                        </>
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
 
-                {/* Recognition Language selection - only show if cascaded/agent and not mai-ears-1 */}
-                {isCascaded(mode, model) && srModel !== "mai-ears-1" && (
+                {/* Recognition Language selection - only show if cascaded/agent and not mai-transcribe-1 */}
+                {isCascaded(mode, model) && srModel !== "mai-transcribe-1" && (
                   <div className="space-y-2">
                     <label className="text-sm font-medium">
                       Recognition Language
@@ -2858,6 +2967,135 @@ const ChatInterface = () => {
                       disabled={isConnected}
                     />
                   </div>
+                )}
+                {/* Interim Response Configuration - only for cascaded models and agent mode (not supported by realtime models) */}
+                {isCascaded(mode, model) && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-sm font-medium">
+                    <span>Interim response</span>
+                    <Switch
+                      checked={interimResponseEnabled}
+                      onCheckedChange={setInterimResponseEnabled}
+                      disabled={isConnected}
+                    />
+                  </div>
+                  {interimResponseEnabled && (
+                    <div className="space-y-2 pl-2 border-l-2 border-gray-200">
+                      <div className="space-y-1">
+                        <label className="text-sm font-medium">Type</label>
+                        <Select
+                          value={interimResponseType}
+                          onValueChange={(value: string) =>
+                            setInterimResponseType(value as "static_interim_response" | "llm_interim_response")
+                          }
+                          disabled={isConnected}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="static_interim_response">Static</SelectItem>
+                            <SelectItem value="llm_interim_response">LLM</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-sm font-medium">Triggers</label>
+                        <div className="flex gap-4">
+                          <label className="flex items-center gap-1 text-sm">
+                            <Checkbox
+                              checked={interimResponseTriggers.includes("latency")}
+                              onCheckedChange={(checked) => {
+                                setInterimResponseTriggers(prev =>
+                                  checked
+                                    ? [...prev.filter(t => t !== "latency"), "latency"]
+                                    : prev.filter(t => t !== "latency")
+                                );
+                              }}
+                              disabled={isConnected}
+                            />
+                            Latency
+                          </label>
+                          <label className="flex items-center gap-1 text-sm">
+                            <Checkbox
+                              checked={interimResponseTriggers.includes("tool")}
+                              onCheckedChange={(checked) => {
+                                setInterimResponseTriggers(prev =>
+                                  checked
+                                    ? [...prev.filter(t => t !== "tool"), "tool"]
+                                    : prev.filter(t => t !== "tool")
+                                );
+                              }}
+                              disabled={isConnected}
+                            />
+                            Tool call
+                          </label>
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-sm font-medium">
+                          Latency threshold (ms)
+                        </label>
+                        <Input
+                          type="number"
+                          value={interimResponseLatencyThreshold}
+                          onChange={(e) => setInterimResponseLatencyThreshold(Number(e.target.value))}
+                          disabled={isConnected}
+                          min={500}
+                          step={500}
+                        />
+                      </div>
+                      {interimResponseType === "static_interim_response" && (
+                        <div className="space-y-1">
+                          <label className="text-sm font-medium">
+                            Response texts (one per line)
+                          </label>
+                          <textarea
+                            className="w-full min-h-[80px] p-2 border rounded text-sm"
+                            value={interimResponseTexts}
+                            onChange={(e) => setInterimResponseTexts(e.target.value)}
+                            disabled={isConnected}
+                            placeholder="Let me think about that...&#10;One moment please..."
+                          />
+                        </div>
+                      )}
+                      {interimResponseType === "llm_interim_response" && (
+                        <div className="space-y-2">
+                          <div className="space-y-1">
+                            <label className="text-sm font-medium">Model</label>
+                            <Input
+                              value={interimResponseModel}
+                              onChange={(e) => setInterimResponseModel(e.target.value)}
+                              disabled={isConnected}
+                              placeholder="gpt-4.1-mini"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-sm font-medium">Instructions</label>
+                            <textarea
+                              className="w-full min-h-[60px] p-2 border rounded text-sm"
+                              value={interimResponseInstructions}
+                              onChange={(e) => setInterimResponseInstructions(e.target.value)}
+                              disabled={isConnected}
+                              placeholder="Custom instructions for generating interim responses..."
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-sm font-medium">Max tokens</label>
+                            <Input
+                              type="number"
+                              value={interimResponseMaxTokens}
+                              onChange={(e) => setInterimResponseMaxTokens(Number(e.target.value))}
+                              disabled={isConnected}
+                              min={10}
+                              step={10}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
                 )}
                 <div className="flex items-center justify-between text-sm font-medium">
                   <span>Enable proactive responses</span>
@@ -3131,7 +3369,7 @@ const ChatInterface = () => {
                       </div>
                     </div>
                     {/* Foundry Agent Tool Section */}
-                    <div className="mt-4">
+                    <div className="mt-4 hidden">
                       <div className="border rounded-md">
                         <div className="p-2 font-medium">Foundry Agent Tools</div>
                         <div className="border-t p-2 space-y-2">
@@ -3339,8 +3577,8 @@ const ChatInterface = () => {
                     </div>
                   </div>
                 )}
-                {/* Temperature is not configurable in agent-v2 mode */}
-                {mode !== "agent-v2" && (
+                {/* Temperature is not configurable in agent mode */}
+                {mode !== "agent" && (
                   <div className="space-y-2">
                     <label className="text-sm font-medium">
                       Temperature ({temperature})
@@ -3427,8 +3665,14 @@ const ChatInterface = () => {
                     <div className="space-y-2 pl-2 border-l-2 border-purple-200">
                       <label className="text-sm font-medium text-gray-700">Voice</label>
                       <Select
-                        value={voiceName}
-                        onValueChange={setVoiceName}
+                        value={availableVoices.some((v) => v.id === voiceName) ? voiceName : "__custom__"}
+                        onValueChange={(value) => {
+                          if (value === "__custom__") {
+                            setVoiceName("");
+                          } else {
+                            setVoiceName(value);
+                          }
+                        }}
                         disabled={isConnected}
                       >
                         <SelectTrigger className="bg-white">
@@ -3447,8 +3691,16 @@ const ChatInterface = () => {
                                 {voice.name}
                               </SelectItem>
                             ))}
+                          <SelectItem value="__custom__">Custom voice name...</SelectItem>
                         </SelectContent>
                       </Select>
+                      <Input
+                        placeholder="Or type any voice name"
+                        value={availableVoices.some((v) => v.id === voiceName) ? "" : voiceName}
+                        onChange={(e) => setVoiceName(e.target.value)}
+                        disabled={isConnected}
+                        className="bg-white"
+                      />
                     </div>
                   )}
 
@@ -3475,7 +3727,7 @@ const ChatInterface = () => {
                   )}
 
                   {/* Voice Speed Slider */}
-                  {(voiceType !== "standard" || voiceName.includes("-")) && (
+                  {(voiceType !== "standard" || voiceName.includes("-") || voiceName.includes(":")) && (
                     <div className="space-y-2 pt-2 border-t border-gray-200">
                       <label className="text-sm font-medium text-gray-700">
                         Voice Speed ({Math.round(voiceSpeed * 100)}%)

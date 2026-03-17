@@ -1,12 +1,13 @@
 import argparse
 import json
-import os
-
-from aiohttp import web
-from azure.ai.agents.aio import AgentsClient
-from azure.identity.aio import DefaultAzureCredential, get_bearer_token_provider
 import logging
+import os
+from typing import AsyncGenerator
+
 import dotenv
+from aiohttp import web
+from azure.ai.projects.aio import AIProjectClient
+from azure.identity.aio import DefaultAzureCredential, get_bearer_token_provider
 
 dotenv.load_dotenv()
 
@@ -15,12 +16,8 @@ logger = logging.getLogger(__name__)
 
 get_token = get_bearer_token_provider(DefaultAzureCredential(), "https://ai.azure.com/.default")
 RETURN_CONFIGS = os.environ.get("RETURN_CONFIGS", "false").lower() == "true"
-AI_SERVICE_ENDPOINT = os.environ.get(
-    "AI_SERVICE_ENDPOINT", "https://yulin-jpe-resource.cognitiveservices.azure.com/"
-)
-AZURE_FOUNDRY_PROJECT_NAME = os.environ.get(
-    "AZURE_FOUNDRY_PROJECT_NAME", "_project"
-)  # Default project name if not set
+AI_SERVICE_ENDPOINT = os.environ.get("AI_SERVICE_ENDPOINT", "https://yulin-jpe-resource.cognitiveservices.azure.com/")
+AZURE_FOUNDRY_PROJECT_NAME = os.environ.get("AZURE_FOUNDRY_PROJECT_NAME", "_project")  # Default project name if not set
 
 
 async def index(request):
@@ -411,25 +408,21 @@ Would you like me to suggest an itinerary?""",
 }
 
 
-async def get_agents():
+async def get_agents() -> AsyncGenerator[dict, None]:
     try:
-        async with DefaultAzureCredential() as credential:
-            async with AgentsClient(
-                endpoint=f"{AI_SERVICE_ENDPOINT}/api/projects/{AZURE_FOUNDRY_PROJECT_NAME}",
-                credential=credential
-            ) as client:
-                async for agent in client.list_agents():
-                    yield {
-                        "name": agent.name,
-                        "id": agent.id,
-                    }
+        async with DefaultAzureCredential() as credential, AIProjectClient(
+            endpoint=f"{AI_SERVICE_ENDPOINT}/api/projects/{AZURE_FOUNDRY_PROJECT_NAME}", credential=credential
+        ) as client:
+            async for agent in client.agents.list():
+                yield {"name": agent.name, "version": agent.versions.latest.version}
     except Exception as e:
-        logger.error(f"Error fetching agents: {e}")
+        logger.error("Error fetching agents: %s", e)
+
 
 agents = None
 
 
-async def config(request):
+async def config(_request):
     if not RETURN_CONFIGS:
         return web.Response(text="", status=404)
     global agents
