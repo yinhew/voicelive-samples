@@ -34,6 +34,7 @@ from azure.ai.voicelive.models import (
     ToolChoiceLiteral,
     VideoCrop,
     VideoParams,
+    VideoResolution,
 )
 
 logger = logging.getLogger(__name__)
@@ -318,8 +319,12 @@ class VoiceSessionHandler:
         if background_url:
             background = Background(image_url=background_url)
 
+        video_resolution = VideoResolution(width=1920, height=1080)
+
         video = VideoParams(
             codec="h264",
+            resolution=video_resolution,
+            bitrate=500000 if is_photo else 1000000,
             crop=video_crop,
             background=background,
         )
