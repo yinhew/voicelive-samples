@@ -301,6 +301,9 @@ FakesAssemblies/
 .ntvs_analysis.dat
 node_modules/
 
+# Conversation logs from voice-live quickstarts
+logs/
+
 # Visual Studio 6 build log
 *.plg
 
@@ -446,6 +449,7 @@ target/
 dependency-reduced-pom.xml
 application.properties
 
-# JavaScript files
+# JavaScript/TypeScript files
 package-lock.json
 node_modules/
+*.tsbuildinfo

@@ -5,12 +5,12 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>com.azure.ai.voicelive</groupId>
-    <artifactId>model-quickstart</artifactId>
+    <artifactId>mcp-quickstart</artifactId>
     <version>1.0.0</version>
     <packaging>jar</packaging>
 
-    <name>Azure VoiceLive Model Quickstart</name>
-    <description>Model quickstart sample for Azure AI VoiceLive SDK</description>
+    <name>Azure VoiceLive MCP Quickstart</name>
+    <description>MCP quickstart sample for Azure AI VoiceLive SDK</description>
 
     <properties>
         <maven.compiler.source>11</maven.compiler.source>
@@ -23,7 +23,7 @@
         <dependency>
             <groupId>com.azure</groupId>
             <artifactId>azure-ai-voicelive</artifactId>
-            <version>1.0.0-beta.1</version>
+            <version>1.0.0-beta.5</version>
         </dependency>
 
         <!-- Azure Core -->
@@ -37,7 +37,7 @@
         <dependency>
             <groupId>com.azure</groupId>
             <artifactId>azure-identity</artifactId>
-            <version>1.18.2</version>
+            <version>1.12.2</version>
         </dependency>
 
         <!-- Reactor Core for reactive programming -->
@@ -61,7 +61,7 @@
     </dependencies>
 
     <build>
-        <sourceDirectory>.</sourceDirectory>
+        <sourceDirectory>src/main/java</sourceDirectory>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -75,9 +75,9 @@
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
-                <version>3.6.3</version>
+                <version>3.1.0</version>
                 <configuration>
-                    <mainClass>ModelQuickstart</mainClass>
+                    <mainClass>MCPQuickstart</mainClass>
                 </configuration>
             </plugin>
         </plugins>

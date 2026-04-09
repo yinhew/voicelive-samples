@@ -1,5 +1,5 @@
 {
-  "name": "voice-live-model-quickstart",
+  "name": "voice-live-mcp-quickstart",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -7,7 +7,7 @@
     "@azure/ai-voicelive": "1.0.0-beta.3",
     "@azure/core-auth": "^1.9.0",
     "@azure/identity": "^4.6.0",
-    "dotenv": "^17.4.0"
+    "dotenv": "^16.4.7"
   },
   "optionalDependencies": {
     "node-record-lpcm16": "^1.0.1",
